@@ -166,7 +166,7 @@ def main():
     if args.mode == "poc":
         if not args.plaintext:
             raise SystemExit("--plaintext required for poc")
-        os.makedirs(args.cache_dir, exist_ok=True)
+        os.makedirs("./cache", exist_ok=True)
         poc_mode(lib, args.plaintext, "./cache")
         return
 
