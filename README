@@ -1,3 +1,7 @@
 All credits for the authorship of SEPAR_Cipher go to arsalanvahi on github.
 
-I made slight modifications to the source in order to make it more modular (to work with my script), hence the reupload.
+I made slight modifications to the source in order to make it more modular (to work with my script), hence the reupload of \SEPAR_Cipher.
+
+See SPEAR.py for usage and description.
+
+See Arxiv\DOI_TBA for detailed explaination of attack
