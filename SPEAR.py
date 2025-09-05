@@ -148,10 +148,9 @@ def poc_mode(lib: SeparLib, plaintext_hex: str, cache_dir: str):
 
 def main():
     ap = argparse.ArgumentParser(description="SEPAR prefix-conditioned codebook attack using ./SEPAR.so")
-    ap.add_argument("--mode", required=True, choices=["encode", "poc", "decrypt"],
+    ap.add_argument("--mode", required=True, choices=["encode", "poc"],
                     help="encode: encrypt any hex; poc: encrypt then recover; decrypt: recover from ciphertext only")
     ap.add_argument("--plaintext", help="Hex plaintext (multiple of 4 hex chars) for encode/poc")
-    ap.add_argument("--ciphertext", help="Hex ciphertext (multiple of 4 hex chars) for decrypt")
 
     args = ap.parse_args()
 
