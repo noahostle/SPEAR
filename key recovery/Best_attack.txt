@@ -1,0 +1,148 @@
+Best current key-recovery weakness for SEPAR
+===========================================
+
+Summary
+-------
+The strongest weakness is no longer just the direct K8 peel. The better attack path is:
+
+1. Recover K8 from the first-block codebook.
+2. Use chosen two-block queries to turn the second block into a leakage oracle for the
+   first block's hidden stage-4 output v45(prefix).
+3. Treat v45(prefix) + s5 as known chosen inputs to the outer half (stages 5..8) and
+   peel K7, K6, and K5 recursively.
+4. After the outer half is known, the same block-2 idea leaks v23(prefix), which splits
+   the inner half further.
+
+The attack is against the full implemented cipher, including its initialization and state
+update logic. The structural issue is that later-block state words are linear functions of
+earlier-block hidden intermediates, so chosen-prefix codebooks expose those intermediates
+as additive shifts.
+
+What is fully validated
+-----------------------
+I validated the following parts with code:
+
+1. K8 recovery from a first-block chosen-plaintext codebook.
+   - This is the original stage-8 differential peel.
+   - File: key recovery/k8_rank_attack.py
+
+2. A real block-2 leakage of first-block v45(prefix).
+   - For a fixed IV and fixed first block prefix p, the second block uses
+
+         s8^(2)(p) = s8 + v45(p)
+
+     because state_8 is updated by +v45 after block 1.
+   - Therefore, after the K8 peel, the relative stage-8 shift between two block-2
+     codebooks is exactly
+
+         Delta s8^(2) = v45(p0) - v45(p1).
+
+   - This is demonstrated in key recovery/block2_v45_leak.py against the DLL oracle.
+   - For prefixes 0x0000 and 0x0001 under the built-in key and zero IV, the true
+     Delta v45 = 0xFF95 scored 414, while the best sampled wrong delta scored 311.
+
+3. Once v45(prefix) + s5 is known, the outer half peels recursively.
+   - I modeled the reduced 4-stage outer half
+
+         ct = F8(F7(F6(F5(x + s5) + s6) + s7) + s8)
+
+     with x = v45(prefix).
+   - On the built-in key, for sample sizes N = 1024, 2048, 4096 known x values, the
+     correct K7 and K6 candidates score above sampled wrong keys, and K5 becomes trivial
+     after K7 and K6 are peeled.
+   - File: key recovery/outer_half_peel_stats.py
+
+4. Oracle throughput is high enough that the required online data is practical locally.
+   - In this environment I measured about 1.21e5 blocks/sec for repeated two-block DLL
+     calls from Python, and about 4.25e5 blocks/sec for large batched calls.
+   - File: key recovery/oracle_speed_benchmark.py
+
+Key structural observations
+---------------------------
+The main state-update identities are:
+
+    s5' = s5 + v23 + lfsr'
+    s8' = s8 + v45
+
+for the next block after a chosen prefix. This means:
+
+1. Block-2 ciphertext codebooks leak v45(prefix) differences after only the K8 peel.
+2. After the outer half is known, block-2 stage-5-input codebooks leak v23(prefix)
+   differences, because the stage-5 input offset is s5' and its relative shift is
+   Delta v23(prefix).
+
+These are not toy reduced-round facts. They come directly from the implemented state
+update in SEPAR/main.c.
+
+Concrete experimental results
+-----------------------------
+Built-in key, zero IV, and the score
+
+    score = sum over alpha in [1..8] of max_beta count
+
+gave the following outer-half margins once x = v45 + s5 is known:
+
+1. K7 peel:
+   - N = 1024: true 377, best sampled wrong 316, margin 61
+   - N = 2048: true 727, best sampled wrong 577, margin 150
+   - N = 4096: true 1376, best sampled wrong 1106, margin 270
+
+2. K6 peel after correct K7:
+   - N = 1024: true 433, best sampled wrong 389, margin 44
+   - N = 2048: true 809, best sampled wrong 747, margin 62
+   - N = 4096: true 1548, best sampled wrong 1401, margin 147
+
+3. K5 peel after correct K7 and K6:
+   - N = 4096: true 32768, best sampled wrong 1587
+   - In practice K5 collapses once the first two outer stages are peeled.
+
+Online cost estimate
+--------------------
+If you recover a sample of N = 2048 first-block v45 values by querying full block-2
+suffix codebooks, the online cost is:
+
+    2048 prefixes * 65536 suffixes * 2 blocks
+    = 268,435,456 block encryptions
+
+At the measured Python ctypes rate of about 1.20995e5 blocks/sec for two-block calls,
+this is about 36.97 minutes. A tighter C harness should do better.
+
+Why this is stronger than the old K8-only attack
+------------------------------------------------
+The original K8 peel exposed only 32 key bits. The new result exposes a recursive split:
+
+1. The full cipher leaks a middle value v45(prefix) through block-2 shift differences.
+2. That turns the outer half into a much easier chosen-input cipher.
+3. After the outer half is removed, the same mechanism leaks v23(prefix), which is the
+   bridge into the inner half.
+
+So the implementation has a genuine stage-separation weakness, not just a final-round
+statistical distinguisher.
+
+Current limitation
+------------------
+I have not fully automated the inner-half continuation after v23 yet. The strong,
+validated part is:
+
+    full cipher -> recover K8 -> leak v45 -> recover K7, K6, K5
+
+The next recursive step is already structurally identified:
+
+    outer half known -> leak v23 through block-2 stage-5-input codebooks
+
+and I verified the exact state relation that makes this possible. What remains is to
+finish the tooling that turns the v23 leakage into a complete K4..K1 recovery.
+
+Files
+-----
+- key recovery/k8_rank_attack.py
+  First-block K8 differential ranking attack.
+
+- key recovery/block2_v45_leak.py
+  Demonstrates the full-cipher block-2 v45 leakage against the DLL oracle.
+
+- key recovery/outer_half_peel_stats.py
+  Measures K7/K6/K5 peel margins once v45 + s5 is known.
+
+- key recovery/oracle_speed_benchmark.py
+  Benchmarks the DLL oracle to estimate online query cost.
