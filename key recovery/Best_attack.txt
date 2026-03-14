@@ -3,15 +3,27 @@ Best current key-recovery weakness for SEPAR
 
 Summary
 -------
-The strongest weakness is no longer just the direct K8 peel. The better attack path is:
+The strongest weakness is still the stage-separation path, but the picture is clearer now:
 
-1. Recover K8 from the first-block codebook.
-2. Use chosen two-block queries to turn the second block into a leakage oracle for the
-   first block's hidden stage-4 output v45(prefix).
-3. Treat v45(prefix) + s5 as known chosen inputs to the outer half (stages 5..8) and
-   peel K7, K6, and K5 recursively.
-4. After the outer half is known, the same block-2 idea leaks v23(prefix), which splits
-   the inner half further.
+1. Recover K8 from a small family of chosen-IV first-block codebooks.
+2. Use chosen two-block queries to recover exact relative v45(prefix) values.
+3. Once K7 is available, the exact block-2 recursion does continue all the way inward.
+   Using only two prefixes (0x0000 and 0x0001) and full 65536-suffix block-2 codebooks,
+   I validated an exact recursive peel that recovers
+
+       K6 -> K5 -> K4 -> K3 -> K2
+
+   by alternating:
+   - one exact delta-search between the two prefix codebooks,
+   - one common-shift scan for the current stage,
+   - and one row/column scan for the true 32-bit segment.
+
+   The last segment K1 is then recovered exactly with a one-stage SMT solve on the final
+   aligned stage-1 codebook.
+4. So the old `s8` issue is no longer the real recursive blocker. The remaining end-to-end
+   blocker is exact K7 recovery from K8-known oracle access.
+5. There is a promising fixed-IV first-block K7 score after the K8 peel, but I do not yet
+   have a generic exact K7 front-end.
 
 The attack is against the full implemented cipher, including its initialization and state
 update logic. The structural issue is that later-block state words are linear functions of
@@ -41,7 +53,43 @@ I validated the following parts with code:
    - For prefixes 0x0000 and 0x0001 under the built-in key and zero IV, the true
      Delta v45 = 0xFF95 scored 414, while the best sampled wrong delta scored 311.
 
-3. Once v45(prefix) + s5 is known, the outer half peels recursively.
+3. Once K7 is known, the recursive block-2 peel recovers the rest of the key exactly.
+   - I added key recovery/outer_half_recursive_break.py to demonstrate the exact inward
+     recursion on the real DLL.
+   - The script uses:
+
+         K8 known
+         + exact Delta v45(prefix) from block 2
+         + known K7
+
+     to build a chain of exact two-prefix block-2 alignments.
+   - On the built-in key and zero IV, with only prefixes 0x0000 and 0x0001, the script
+     recovers:
+
+         K6 = F44A233E
+         K5 = 50C512DB
+         K4 = E95307FD
+         K3 = 02DD3972
+         K2 = DA5D96D7
+
+     as exact row and column maxima under the recovered common shift at each stage.
+   - It then solves K1 exactly from the final aligned stage-1 codebook with the existing
+     one-stage SMT solver:
+
+         K1 = E8B9B733
+
+     in about 121 seconds.
+   - The whole seeded recursive run (K8 and K7 supplied, then K6..K1 recovered) uses only
+     the two full-domain block-2 codebooks for prefixes 0x0000 and 0x0001:
+
+         2 * 65536 = 131072 two-block oracle queries
+
+     and took about 980 seconds on this machine.
+   - So the recursive attack no longer stops at the outer half. Once K7 is available, the
+     rest of the 256-bit key follows exactly.
+   - File: key recovery/outer_half_recursive_break.py
+
+4. Once v45(prefix) + s5 is known, the outer half peels recursively.
    - I modeled the reduced 4-stage outer half
 
          ct = F8(F7(F6(F5(x + s5) + s6) + s7) + s8)
@@ -52,10 +100,276 @@ I validated the following parts with code:
      after K7 and K6 are peeled.
    - File: key recovery/outer_half_peel_stats.py
 
-4. Oracle throughput is high enough that the required online data is practical locally.
+5. Oracle throughput is high enough that the required online data is practical locally.
    - In this environment I measured about 1.21e5 blocks/sec for repeated two-block DLL
      calls from Python, and about 4.25e5 blocks/sec for large batched calls.
    - File: key recovery/oracle_speed_benchmark.py
+
+6. Once a single stage is isolated as exact input/output pairs, its 32-bit segment key is
+   easy to recover exactly.
+   - I added key recovery/stage_exact_solver.py for this step.
+   - On the built-in key, five exact stage-8 I/O pairs recover K8 = FC7D6371 in about
+     six seconds with Z3.
+
+7. The better v23 extractor is through block-2 stage-7-input codebooks, not stage-5.
+   - If K8 and K7 are known and the block-1 outer half has been solved exactly, then
+
+         inv7(inv8(CT2) - (s8 + v45(prefix)))
+
+     equals
+
+         v67_2(suffix) + s7 + v23(prefix) + v67(prefix)
+
+     so the relative shift between two prefixes is
+
+         Delta v23(prefix) + Delta v67(prefix).
+
+   - Since Delta v67(prefix) is already known after the outer-half solve, this gives
+     Delta v23(prefix) directly.
+   - File: key recovery/v23_stage7_leak.py
+
+8. There is a promising 16-bit split of the remaining K8 search.
+   - Writing the last internal stage-8 round as
+
+         ct = S(a4 ^ k4) ^ k5
+
+     with
+
+         k4 = key0 ^ key1
+         k5 = key2 ^ key3
+
+     gives a natural final-round peel.
+   - On the real first-block codebooks, chosen-IV differential tests show usable nibble
+     leakage on k5: some IV/alpha surfaces rank the true nibble first.
+   - If k5 is recovered exactly, the stage-8 key-pair search collapses sharply. For the
+     built-in key, the equation
+
+         f(key0) ^ g(key1) = k5
+
+     leaves only 98,304 compatible (key0, key1) pairs, which is small enough that the
+     original full K8 score can finish the segment.
+   - I also confirmed that after the k5 peel, the true k4 gives a stronger second-step
+     score than sampled wrong 16-bit guesses on the zero-IV first-block codebook.
+   - This is not a finished generic K8 attack yet, but it is the strongest concrete lead
+     on removing the last 2^32 bottleneck.
+
+9. The implementation's stage-8 key schedule has a real entropy-collapse bug.
+   - The code derives key2 and key3 with
+
+         key2 |= SBOX1[(key2 >> 6) & 0xF] << 6
+         key3 |= SBOX1[(key3 >> 6) & 0xF] << 6
+
+     rather than replacing that nibble.
+   - So the nonlinear nibble map is
+
+         n -> n | SBOX1(n)
+
+     whose image has size only 9, not 16.
+   - This sharply strengthens the stage-8 split:
+     - exact k5 leaves between 32,768 and 180,224 compatible (key0, key1) pairs,
+       depending on k5, with average 65,536;
+     - exact k4 and k5 together leave only 2, 4, 6, or 16 compatible pairs,
+       with average 2.844... over reachable k5 values for a fixed k4.
+   - On the built-in key, the true pair (FC7D, 6371) is one of only two compatible
+     pairs for k4 = 9F0C and k5 = DA33.
+   - File: key recovery/stage8_schedule_analysis.py
+
+10. Wide chosen-IV families do create a real k5 shortlist signal, but not an exact one.
+   - I tested a generic family of 93 full first-block codebooks against the real DLL:
+     all single-word IV perturbations
+
+         iv[i] in {1,2,4,8,0x10,0x100,0x1000,0x8000,0xFFFF,0x5555,0xAAAA}
+
+     for i = 0..7, plus the global IVs
+
+         0^128, F^128, 1^128, 1111^8, 8000^8.
+
+   - For each surface I scored sampled k5 candidates with the last-round peel
+     metric. This is a real signal, but it is still not exact enough to claim generic k5
+     recovery.
+
+11. The corrected first-block oracle surfaces are stronger than the earlier streaming
+    benchmarks suggested.
+   - The early C-side K8 experiments accidentally used long streaming messages, not
+     independent one-block oracle queries. I corrected that by building datasets where
+     each plaintext is encrypted as a separate one-word message under the same IV.
+   - File: key recovery/build_firstblock_dataset.py
+   - On the corrected first-block datasets, simple chosen-IV surfaces make the K8 search
+     much sharper than zero IV.
+   - For the built-in key, the first-block surface
+
+         IV = 0000 0002 0000 0000 0000 0000 0000 0000
+
+     gives the true K8 row maximum
+
+         max_k0 score(k0, true_k1) = 246
+
+     while 23 sampled wrong k1 rows gave maxima only between 155 and 163.
+
+12. A fixed small IV family makes full K8 exhaustive search practical on real hardware.
+   - I tested fixed one-word IV surfaces that do not depend on the secret key:
+
+         iv[1] = 0x0001
+         iv[1] = 0x0002
+         iv[5] = 0x1000
+         iv[3] = 0x1000
+
+   - On 5 keys (the built-in key plus 4 random master keys), the 4-surface aggregate
+     first-block K8 score at sample size 1024 beat the best of 12 sampled wrong K8
+     guesses by margins
+
+         132, 43, 55, 57, 21.
+
+   - Even the 2-surface family
+
+         iv[1] = 0x0001
+         iv[5] = 0x1000
+
+     stayed positive on the same 5 keys. The aggregate margins were:
+
+         sample size 512:  29,  9,  5, 24, 10
+         sample size 768:  40, 20, 18, 47, 13
+         sample size 1024: 51, 22,  9, 54, 17
+
+   - I then extended that 2-surface test to 10 keys (the built-in key plus 9 random
+     master keys), again against 8 sampled wrong K8 guesses per key. The aggregate
+     margins were:
+
+         sample size 512:  26, 10, 14, 14, -2, -3, 29,  5, 15, -1
+         sample size 768:  42, 22, 35,  2, 33, 27, 16,  7, 15, 12
+         sample size 1024: 44, 22, 33, 28, 12,  6, 29, 15, 29,  3
+
+   - So the recommended generic setting for the 2-surface exhaustive K8 search is at
+     least sample size 768, not 512.
+
+   - This is still an exhaustive-search attack, not a closed-form exact split, but it
+     moves K8 from "single-core days" into a practical multicore search.
+   - File: key recovery/k8_row_search.c
+   - In that practical sense, this K8 step is now key-agnostic: the attacker uses the
+     same IV family and the same offline search procedure for every key. I validated that
+     empirically on the built-in key plus random master keys. This is not yet a proof for
+     all 2^256 keys, but it is no longer a key-tailored attack.
+
+13. Once K8 is known, exact relative v45(prefix) recovery is practical from full block-2
+    codebooks.
+   - I added key recovery/v45_delta_search.c for this step.
+   - The tool takes two peeled block-2 codebooks for two chosen prefixes and exhaustively
+     searches all 65536 candidate deltas.
+   - On the built-in key, zero IV, and prefixes 0x0000 vs 0x0001, the true
+
+         Delta v45 = 0xFF95
+
+     is recovered exactly from the full 65536-suffix codebooks.
+   - Measured on this machine with 16 threads:
+
+         full 65536-delta search = about 30.9 seconds
+
+   - So the v45 bridge is no longer just a sampled statistical effect. It is now an exact
+     practical extraction step once K8 is known.
+
+14. Exact v45(prefix) still does not automatically give K7 by itself.
+   - I tested the next recursive step directly on exact x_rel = v45(prefix) - v45(ref)
+     datasets built from the true model.
+   - Direct K7 peeling from the first-block relation
+
+         x_rel -> inv8(CT1) = v78 + s8
+
+     fails if the common output shift s8 is unknown.
+   - With the true s8 supplied, the K7 peel becomes strong again. For example, on a
+     2048-point exact x_rel dataset:
+
+         correct K7 score = 336
+         best sampled wrong score = 299
+
+     but with shift forced to 0 the same test drops to
+
+         correct K7 score = 150
+         best sampled wrong score = 171.
+
+   - So K8-known does not yet imply a full automatic key recovery. The remaining concrete
+     blocker is the outer-half common output shift, not the v45 bridge itself.
+
+10. There is a concrete deterministic bypass candidate: exact SAT on the first block with
+    free state offsets.
+   - For one chosen IV, the first data block is exactly an 8-stage translated block
+     cipher:
+
+         CT = F_K(PT ; s1,...,s8)
+
+     where the master key words are the true 256-bit target and the initialization only
+     contributes eight unknown 16-bit state offsets.
+   - I encoded that first-block system directly into CNF/XOR constraints with
+     `pycryptosat`, treating the initialization state as free and shared across all
+     chosen plaintexts for that IV.
+   - This is a deterministic attack path against the real DLL oracle: no scoring, no
+     statistical ranking, no reduced-round simplification.
+   - The current prototype is still too slow for full recovery, but it is exact and the
+     encoding is sound enough to solve toy-sized instances:
+     - two chosen first-block pairs solve in about ten seconds, but leave many models;
+     - three chosen pairs were not solved within a 30-second cutoff with the current
+       naive S-box CNF encoding.
+   - So the blocker here looks more like solver engineering than lack of a deterministic
+     formulation.
+   - File: key recovery/sat_first_block_key_recovery.py
+
+11. The implementation has solver-friendly structure, but it still does not make a one-shot
+    256-bit exact solve practical yet.
+   - The first important structural point is that the post-S-box linear layer is bit-sliced.
+     It only mixes the four nibbles within each bit-plane, because all rotations are by
+     multiples of four. That means each 4x4 S-box can be encoded naturally in ANF/XOR
+     form instead of a large forbid-clause CNF.
+   - I updated key recovery/sat_first_block_key_recovery.py with an ANF/XOR S-box
+     encoding and a multi-IV first-block mode. On the same toy first-block instance of two
+     chosen plaintext pairs under one IV, the exact solve time dropped from about 17.25 s
+     with the forbid-clause encoding to about 12.36 s with the ANF/XOR encoding.
+   - The second structural point is that chosen-IV first-block solving should not model the
+     initialization directly at first. For each chosen IV, the first data block is exactly an
+     8-stage translated cipher with only eight unknown 16-bit offsets. That is the right
+     abstraction for a solver, because it shares the real 256-bit key across many IVs while
+     avoiding the full nonlinear initialization recurrence.
+   - I tested that stronger formulation too:
+     - multi-IV first-block solving with free post-init states still times out on useful data,
+       even when the true stage-8 pair is fixed exactly;
+     - fixing only the true stage-8 k5 is weaker and also still times out on useful data;
+     - so the current exact bottleneck is still stage 8.
+   - The third structural point is a more meaningful stage-separation fact for later solver
+     work: across message blocks, the outer half does not depend on the whole inner half.
+     It only depends on the three 16-bit bridge words
+
+         a_i = v12_i
+         b_i = v23_i
+         d_i = v45_i
+
+     from each block. The implemented state update gives the exact outer-half recurrence
+
+         ct_i = F8(F7(F6(F5(d_i + s5_i) + s6_i) + s7_i) + s8_i)
+         s5_{i+1} = s5_i + b_i + lfsr_{i+1}
+         s6_{i+1} = s6_i + a_i + d_i + s7_i
+         s7_{i+1} = s7_i + b_i + v67_i
+         s8_{i+1} = s8_i + d_i
+
+     so a deterministic solver does not need the full inner-half transcript to model the
+     outer half. It only needs those 48 bridge bits per block.
+   - There is also an exact cancellation bug in the state update itself:
+
+         state_4' = state_4 + state_8 + v12 + v45
+         state_6' = state_6 + state_7 + v12 + v45
+
+     so the same `(v12 + v45)` term is injected into both words. Therefore
+
+         state_4' - state_6' = state_4 + state_8 - state_6 - state_7
+
+     and the outer-state difference after one block no longer depends on any fresh block
+     outputs at all. I do not yet have a full key-recovery exploit from this relation alone,
+     but it is a real implementation-level weakness and reduces the effective state
+     complexity seen by later blocks.
+   - I also built an exact-init SAT model in the same script. It models the real 4-round
+     initialization plus chosen first-block queries directly, with optional exact stage-8
+     constraints. This confirms the exact-init route is sound enough to encode, but still too
+     hard in practice right now: even with the true stage-8 pair fixed and one chosen IV /
+     one chosen first-block plaintext, the solver still times out rather than finishing.
+   - That is a real implementation-level simplification for future exact attacks, but it did
+     not yet turn into a complete arbitrary-key solve in my tests.
 
 Key structural observations
 ---------------------------
@@ -67,9 +381,12 @@ The main state-update identities are:
 for the next block after a chosen prefix. This means:
 
 1. Block-2 ciphertext codebooks leak v45(prefix) differences after only the K8 peel.
-2. After the outer half is known, block-2 stage-5-input codebooks leak v23(prefix)
-   differences, because the stage-5 input offset is s5' and its relative shift is
-   Delta v23(prefix).
+2. After the outer half is known exactly, block-2 stage-7-input codebooks leak
+   v23(prefix) differences, because the stage-7 input offset is
+
+       s7' = s7 + v23(prefix) + v67(prefix)
+
+   and v67(prefix) is already computable from the solved outer half.
 
 These are not toy reduced-round facts. They come directly from the implemented state
 update in SEPAR/main.c.
@@ -113,25 +430,154 @@ The original K8 peel exposed only 32 key bits. The new result exposes a recursiv
 
 1. The full cipher leaks a middle value v45(prefix) through block-2 shift differences.
 2. That turns the outer half into a much easier chosen-input cipher.
-3. After the outer half is removed, the same mechanism leaks v23(prefix), which is the
-   bridge into the inner half.
+3. After the outer half is removed, the stage-7 variant of the same mechanism leaks
+   v23(prefix), which is the bridge into the inner half.
 
 So the implementation has a genuine stage-separation weakness, not just a final-round
 statistical distinguisher.
 
 Current limitation
 ------------------
-I have not fully automated the inner-half continuation after v23 yet. The strong,
-validated part is:
+The remaining blocker is no longer K8, and it is no longer the v45 bridge either. The
+current blocker is the outer-half stage-7 output shift. After K8 is known, I can recover
+exact relative v45(prefix) values quickly, but I do not yet have a generic exact method
+to recover the common shift s8 that is needed to turn the K7 peel back into a reliable
+full-cipher recursion step.
+
+This pass improved the picture in one useful way: there are now two validated facts
+about the remaining barrier.
+
+1. Exact k5 would still collapse stage 8 immediately because of the schedule bug.
+2. Even without exact k5, a fixed chosen-IV family now gives a realistic full K8 search
+   path with real-oracle first-block datasets.
+3. After K8 is known, exact v45(prefix) extraction is practical, but the recursive attack
+   still stops at the outer-half shift unless that shift is solved too.
+
+What did not hold up generically:
+
+1. Picking IV surfaces by eye from one key.
+2. Picking surfaces by candidate-score spread.
+3. Learning a classifier on per-surface k5 scores.
+4. Mixed IV/plaintext co-variation surfaces as a generic exact recovery method.
+
+What now looks like the cleanest deterministic route:
+
+1. Use the stronger ANF/XOR exact encoding rather than the old forbid-clause CNF.
+2. Do not ask the solver for the whole initialized cipher first. Use the multi-IV first-block
+   translated-cipher abstraction, where each IV contributes only eight free 16-bit offsets.
+3. Treat the recursive leaks as bridge variables, because the outer half depends only on
+   (v12, v23, v45) from earlier blocks, not on the whole inner-half computation.
+4. In practice, the remaining exact blocker is still stage 8. If stage 8 is solved exactly,
+   the rest of the recursive attack looks much more solver-friendly than the original full
+   256-bit bit-blast.
+
+If that step becomes practical, it bypasses the whole `k5` barrier and the recursive
+outer-half attack is no longer needed for key recovery.
+
+The strong, validated parts are:
 
     full cipher -> recover K8 -> leak v45 -> recover K7, K6, K5
 
-The next recursive step is already structurally identified:
+and then:
 
-    outer half known -> leak v23 through block-2 stage-5-input codebooks
+    exact outer half known -> leak v23 through block-2 stage-7-input codebooks
+    v23 exact -> solve K2/K1 and K4/K3 as two exact two-stage problems
 
-and I verified the exact state relation that makes this possible. What remains is to
-finish the tooling that turns the v23 leakage into a complete K4..K1 recovery.
+What I do not have yet is an end-to-end script that performs every step automatically
+against the DLL without any seeded segment values.
+
+The practical impact of the new stage-8 schedule result is:
+
+1. If k5 is recovered exactly, the remaining K8 solve is no longer a 2^32 problem.
+   It is a roughly 2^16 candidate-pair check, which should be on the order of seconds
+   with the current scorer.
+
+2. If both k4 and k5 are recovered exactly, the remaining (key0, key1) ambiguity is
+   tiny. For a fixed k4, each reachable k5 has at most 16 compatible pairs.
+
+With the corrected first-block datasets and the new multicore row-search tool on this
+Ryzen 9 8945HS (8 cores / 16 threads), the practical K8 cost is:
+
+1. One 2048-sample first-block surface, 16 threads:
+   - Measured: 32 k1 rows in 32.4 seconds
+   - Extrapolated full K8 sweep: about 18.4 hours per surface
+
+2. Two 768-sample first-block surfaces (iv[1]=1 and iv[5]=0x1000), 16 threads:
+   - Measured: 32 k1 rows in 53.7 seconds
+   - Extrapolated full K8 sweep: about 30.5 hours
+
+3. Two 1024-sample first-block surfaces (iv[1]=1 and iv[5]=0x1000), 16 threads:
+   - Measured: 32 k1 rows in 69.6 seconds
+   - Extrapolated full K8 sweep: about 39.6 hours
+
+Recommended practical setting on this system
+--------------------------------------------
+For the current best generic K8 break on this machine, the recommended setting is:
+
+1. Query two fixed first-block codebooks:
+
+       iv[1] = 0x0001
+       iv[5] = 0x1000
+
+2. Use sample size 768 per surface, with alphas [1..8].
+3. Run the 16-thread exhaustive K8 search in key recovery/k8_row_search.exe.
+
+This costs, on this Ryzen 9 8945HS system:
+
+1. Online oracle queries:
+   - 776 one-block queries per surface, because the 768 chosen plaintexts need the
+     closure under +alpha for alpha in [1..8]
+   - total = 1552 one-block oracle queries
+
+2. Offline K8 search:
+   - measured 32 k1 rows in 53.7 seconds
+   - full 65536-row sweep = 2048 such batches
+   - total = about 109,900 seconds = 30.5 hours
+
+3. More conservative generic setting:
+   - sample size 1024 on the same two surfaces
+   - total oracle queries = 2064 one-block queries
+   - full offline K8 sweep = about 39.6 hours
+
+So the current best honest estimate for the outermost exact K8 recovery on this system is
+about 30.5 hours in the recommended 768-sample setting, or about 39.6 hours in the more
+conservative 1024-sample setting.
+
+So the outermost 32-bit segment is no longer a "wait many days" barrier if the attacker
+can use multicore offline search. The main remaining cost is then the recursive follow-on
+work after K8, not K8 itself.
+
+By contrast, once k5 is exact, the stage-8 schedule collapse means the residual search
+is roughly:
+
+    17.8 seconds * compatible_pairs / 65536
+
+which is about 8.9 seconds at 32,768 pairs, 17.8 seconds at the 65,536-pair average,
+and 49.0 seconds at the 180,224-pair worst case.
+
+The newest promising route is:
+
+    chosen-IV first-block codebooks
+    -> run the corrected multicore K8 exhaustive row search on a small fixed IV family
+    -> use K8 to recover exact relative v45(prefix) values
+    -> solve the outer-half shift problem
+    -> solve the outer half
+    -> leak v23
+    -> finish the inner half
+
+A secondary route is still:
+
+    chosen-IV first-block codebooks
+    -> turn the last-round peel into a practical k5 shortlist
+    -> use the stage-8 schedule collapse to reduce K8 to about 2^15..2^17.5 compatible
+       key pairs
+    -> finish K8 with the existing differential K8 score
+    -> continue the recursive v45 / outer-half / v23 path
+
+At the moment the first route is the most practical honest K8 break. The exact 16-bit k5
+step is still not done yet, and the generic shortlist signal is not sharp enough to
+replace the exhaustive K8 search honestly. The recursive full-key route is now blocked by
+the outer-half shift, not by K8 itself.
 
 Files
 -----
@@ -141,8 +587,42 @@ Files
 - key recovery/block2_v45_leak.py
   Demonstrates the full-cipher block-2 v45 leakage against the DLL oracle.
 
+- key recovery/outer_half_recursive_break.py
+  Demonstrates the exact recursive block-2 peel from K7 through K1 on the real DLL.
+
 - key recovery/outer_half_peel_stats.py
   Measures K7/K6/K5 peel margins once v45 + s5 is known.
 
 - key recovery/oracle_speed_benchmark.py
   Benchmarks the DLL oracle to estimate online query cost.
+
+- key recovery/stage_exact_solver.py
+  Exact Z3 recovery of one isolated 32-bit stage segment from a few I/O pairs.
+
+- key recovery/v23_stage7_leak.py
+  Demonstrates the stronger block-2 stage-7-input v23 leakage once the outer half is known.
+
+- key recovery/stage8_schedule_analysis.py
+  Measures the stage-8 key-schedule collapse caused by the implementation's `|=` bug and
+  enumerates compatible (key0, key1) pairs for exact k5 or exact (k4, k5).
+
+- key recovery/k5_iv_family_stats.py
+  Measures the generic chosen-IV first-block k5 shortlist signal against the real DLL by
+  aggregating sampled-candidate scores over a fixed 93-surface IV family.
+
+- key recovery/sat_first_block_key_recovery.py
+  Exact CNF/XOR prototype for recovering the 256-bit master key directly from chosen
+  first-block plaintext/ciphertext pairs under one IV, while treating the initialization
+  state as unknown free offsets. It now also includes a stronger ANF/XOR S-box encoding,
+  optional exact stage-8 constraints, and a multi-IV first-block mode.
+
+- key recovery/build_firstblock_dataset.py
+  Builds correct first-block K8 datasets from the DLL by encrypting each chosen plaintext
+  as a separate one-word message under the same IV.
+
+- key recovery/k8_row_search.c
+  Multicore exhaustive K8 row-search tool for one or more corrected first-block datasets.
+
+- key recovery/v45_delta_search.c
+  Multicore exhaustive search for exact Delta v45 between two chosen block-2 codebooks
+  once K8 is known and the block-2 outputs have been peeled through stage 8.

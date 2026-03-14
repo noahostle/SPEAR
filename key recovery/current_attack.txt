@@ -1,0 +1,100 @@
+Current SEPAR Attack Summary
+============================
+
+1. Practical K8 Recovery
+------------------------
+Target:
+    K8 = key[14] || key[15]
+
+Threat model:
+    Chosen-IV, chosen-plaintext access to the real cipher as implemented in SEPAR/main.c.
+
+Core idea:
+    Use independent one-block oracle queries under a fixed small IV family.
+    For each IV surface, build a first-block ciphertext codebook over a chosen plaintext set.
+    Exhaustively score K8 candidates with the stage-8 differential peel and aggregate across surfaces.
+
+Files:
+    build_firstblock_dataset.py
+        Builds correct first-block datasets from the DLL/oracle.
+        Relative dataset outputs go under key recovery/data.
+
+    k8_row_search.c / k8_row_search.exe
+        Multicore exhaustive K8 search over one or more first-block datasets.
+
+Recommended fixed IV family:
+    iv[1] = 0x0001
+    iv[5] = 0x1000
+
+Recommended dataset size:
+    sample size 768 or 1024 per IV surface
+
+Online cost:
+    1552 one-block queries for sample size 768
+    2064 one-block queries for sample size 1024
+
+Offline cost on this machine:
+    About 30.5 hours for the 2-surface, sample-size-768 setting
+    About 39.6 hours for the 2-surface, sample-size-1024 setting
+
+Status:
+    This is the current practical front-end for exact K8 recovery.
+    It is operationally key-agnostic: the same IV family and search procedure are reused across tested keys.
+
+
+2. Exact Recursive K6..K1 Recovery
+----------------------------------
+Target:
+    Recover K6, K5, K4, K3, K2, K1 once K8 and K7 are known.
+
+Threat model:
+    Chosen-IV, chosen-plaintext access to the real cipher as implemented in SEPAR/main.c.
+    K8 and K7 are assumed already recovered.
+
+Core idea:
+    Use two full-domain block-2 codebooks for prefixes 0x0000 and 0x0001.
+    Peel one stage at a time and recursively align the two codebooks with an exact delta search.
+    After alignment at each stage:
+    - scan the common stage shift
+    - scan the row maximum for the true left 16-bit key word
+    - scan the column maximum for the true right 16-bit key word
+
+    This exact recursive bridge works for:
+        K6 -> K5 -> K4 -> K3 -> K2
+
+    The final K1 stage is recovered with an exact one-stage SMT solve on the final aligned stage-1 codebook.
+
+Files:
+    outer_half_recursive_break.py
+        End-to-end seeded recursive attack driver.
+        Generates intermediate .bin codebooks under key recovery/data/outer_half_recursive_break by default.
+
+    v45_delta_search.c / v45_delta_search.exe
+        Exact 16-bit delta search between two aligned codebooks.
+
+    multi_dataset_peel_tool.c / multi_dataset_peel_tool_omp.exe
+        Shift scan and row/column scans for the current stage.
+
+    stage_exact_solver.py
+        Exact one-stage solver used for the final K1 recovery.
+
+Online cost:
+    131072 two-block oracle queries
+    This is exactly:
+        2 prefixes * 65536 suffixes
+
+Observed validated recovery on the built-in key:
+    K6 = F44A233E
+    K5 = 50C512DB
+    K4 = E95307FD
+    K3 = 02DD3972
+    K2 = DA5D96D7
+    K1 = E8B9B733
+
+Observed runtime on this machine:
+    About 980 seconds total for the seeded recursion from K7 down through K1
+    The final K1 SMT solve took about 121 seconds
+
+Status:
+    This recursive attack is exact and validated against the real DLL once K8 and K7 are known.
+    The remaining unsolved front-end is exact generic K7 recovery from K8-known access.
