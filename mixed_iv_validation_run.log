@@ -1,0 +1,72 @@
+Mixed-IV validation run
+stage IV map: s8=0xDA5C, s7=0xDA5C, s6=0xDA5C, s5=0xDA5C, s4=0x6E32, s3=0x6E32, s2=0xDA5C, s1=0xDA5C
+
+stage 8 | iv7=0xDA5C | branches=7 | time=188.92s
+  candidate FC786371
+  candidate FC7A6371
+  candidate FC7B6371
+  candidate FC7C6371
+  candidate FC7D6371
+  candidate FC7E6371
+  candidate FC7F6371
+  contains true key: True
+
+stage 7 | iv7=0xDA5C | branches=7 | true_next_state=0x9738 | time=372.01s
+  candidate 8D189DF5 next_state=0x9738
+  candidate 8D1A9DF5 next_state=0x9738
+  candidate 8D1B9DF5 next_state=0x9738
+  candidate 8D1C9DF5 next_state=0x9738
+  candidate 8D1D9DF5 next_state=0x9738
+  candidate 8D1E9DF5 next_state=0x9738
+  candidate 8D1F9DF5 next_state=0x9738
+  selected true branch: 8D1E9DF5 next_state=0x9738
+
+stage 6 | iv7=0xDA5C | branches=7 | true_next_state=0xF538 | time=355.72s
+  candidate F448233E next_state=0xF538
+  candidate F44A233E next_state=0xF538
+  candidate F44B233E next_state=0xF538
+  candidate F44C233E next_state=0xF538
+  candidate F44D233E next_state=0xF538
+  candidate F44E233E next_state=0xF538
+  candidate F44F233E next_state=0xF538
+  selected true branch: F44A233E next_state=0xF538
+
+stage 5 | iv7=0xDA5C | branches=3 | true_next_state=0x77E7 | time=438.03s
+  candidate 50C412DB next_state=0x77E7
+  candidate 50C512DB next_state=0x77E7
+  candidate 50C612DB next_state=0x77E7
+  selected true branch: 50C512DB next_state=0x77E7
+
+stage 4 | iv7=0x6E32 | branches=2 | true_next_state=0x8356 | time=507.03s
+  candidate E95007FD next_state=0x8356
+  candidate E95307FD next_state=0x8356
+  selected true branch: E95307FD next_state=0x8356
+
+stage 3 | iv7=0x6E32 | branches=7 | true_next_state=0xB9E3 | time=394.18s
+  candidate 02D83972 next_state=0xB9E3
+  candidate 02DA3972 next_state=0xB9E3
+  candidate 02DB3972 next_state=0xB9E3
+  candidate 02DC3972 next_state=0xB9E3
+  candidate 02DD3972 next_state=0xB9E3
+  candidate 02DE3972 next_state=0xB9E3
+  candidate 02DF3972 next_state=0xB9E3
+  selected true branch: 02DD3972 next_state=0xB9E3
+
+stage 2 | iv7=0xDA5C | branches=7 | true_next_state=0xC100 | time=384.66s
+  candidate DA5896D7 next_state=0xC100
+  candidate DA5A96D7 next_state=0xC100
+  candidate DA5B96D7 next_state=0xC100
+  candidate DA5C96D7 next_state=0xC100
+  candidate DA5D96D7 next_state=0xC100
+  candidate DA5E96D7 next_state=0xC100
+  candidate DA5F96D7 next_state=0xC100
+  selected true branch: DA5D96D7 next_state=0xC100
+
+stage 1 | iv7=0xDA5C | branches=1 | true_next_state=0x8011 | time=39.09s
+  candidate E8B9B733 next_state=0x8011
+  selected true branch: E8B9B733 next_state=0x8011
+
+total time: 2712.13s
+all stages recovered on this validation path: True
+recovered master key:
+  E8B9B733DA5D96D702DD3972E95307FD50C512DBF44A233E8D1E9DF5FC7D6371

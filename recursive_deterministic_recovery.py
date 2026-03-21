@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from recursive_quotient_attack import reconstruct_order_from_outputs, transition_counts_on_high
 from separ_analysis import DEFAULT_IV, DEFAULT_KEY, MASK16, dec_block, enc_block, encrypt_word, initial_state
+from stage_local_exact_attack import build_nib1_function_table, recover_stage_local, step1_candidates
 from weak_iv_transition_bridge import exact_best_matching, precompute_group_matchings
 
 
@@ -39,6 +40,11 @@ class StageRecovery:
 class Branch:
     outputs: Tuple[int, ...]
     recovered: Tuple[StageRecovery, ...]
+
+
+@lru_cache(maxsize=None)
+def stage_local_nib1_table() -> Dict[Tuple[int, ...], Tuple[int, int, int, int]]:
+    return build_nib1_function_table()
 
 
 def build_first_block_codebook_from_iv(iv: Sequence[int]) -> List[int]:
@@ -247,6 +253,21 @@ def recover_stage8_from_codebook(codebook: Sequence[int], max_cycles: int | None
 def recover_inner_stage(stage: int, outputs: Sequence[int], low_values: Iterable[int] | None = None) -> List[Branch]:
     if low_values is None:
         low_values = range(256)
+    if stage == 1:
+        out: List[Branch] = []
+        nib1_table = stage_local_nib1_table()
+        for low in low_values:
+            for tau_hi in range(256):
+                next_state = low | (tau_hi << 8)
+                stripped = tuple((value - next_state) & MASK16 for value in outputs)
+                if not step1_candidates(stripped, nib1_table):
+                    continue
+                recovered = recover_stage_local(1, stripped)
+                for item in recovered:
+                    prev_outputs = tuple(dec_block(value, (item.k0, item.k1), 1) for value in stripped)
+                    rec = StageRecovery(1, (item.k0, item.k1), next_state, (), ())
+                    out.append(Branch(prev_outputs, (rec,)))
+        return out
     out: List[Branch] = []
     for low in low_values:
         corrected = tuple((value - low) & MASK16 for value in outputs)
