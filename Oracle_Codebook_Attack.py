@@ -14,7 +14,7 @@ IV_WORDS = 8
 
 
 def _default_lib_path() -> str:
-    return "SEPAR/SEPAR.dll"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "SEPAR", "SEPAR.dll")
 
 
 def _normalize_hex_words(hex_string: str, *, expected_words: Optional[int] = None, field_name: str = "hex") -> str:
@@ -56,7 +56,7 @@ def _words_to_hex(words: Sequence[int]) -> str:
 
 class SeparLib:
     """
-    Wrapper for the high-throughput separ_encrypt_words buffer API.
+    Wrapper for the SEPAR high-throughput buffer APIs.
     """
 
     def __init__(self, lib_path: Optional[str] = None, key_hex: Optional[str] = None, iv_hex: Optional[str] = None):
@@ -65,29 +65,56 @@ class SeparLib:
         if not os.path.exists(lib_path):
             raise FileNotFoundError(f"Shared library not found: {lib_path}")
 
-        self._lib = ctypes.CDLL(lib_path)
-        self._encrypt_words = self._lib.separ_encrypt_words
-        self._encrypt_words.argtypes = (
+        self._lib = ctypes.CDLL(os.path.abspath(lib_path))
+        self._encrypt_words = self._bind_transform("separ_encrypt_words")
+        self._decrypt_words = self._bind_transform("separ_decrypt_words")
+
+        self._key_words = self._make_fixed_word_buffer(key_hex, KEY_WORDS, "key") if key_hex else None
+        self._iv_words = self._make_fixed_word_buffer(iv_hex, IV_WORDS, "iv") if iv_hex else None
+
+    def _bind_transform(self, export_name: str):
+        try:
+            transform = getattr(self._lib, export_name)
+        except AttributeError as e:
+            raise RuntimeError(f"Required DLL export not found: {export_name}") from e
+
+        transform.argtypes = (
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.c_size_t,
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.POINTER(ctypes.c_uint16),
         )
-        self._encrypt_words.restype = ctypes.c_int
-
-        self._key_words = self._make_fixed_word_buffer(key_hex, KEY_WORDS, "key") if key_hex else None
-        self._iv_words = self._make_fixed_word_buffer(iv_hex, IV_WORDS, "iv") if iv_hex else None
+        transform.restype = ctypes.c_int
+        return transform
 
     @staticmethod
     def _make_fixed_word_buffer(hex_string: str, expected_words: int, field_name: str):
         words = _hex_to_words(hex_string, expected_words=expected_words, field_name=field_name)
         return (ctypes.c_uint16 * expected_words)(*words)
 
-    def encrypt_words_into(self, pt_words, ct_words, word_count: int) -> None:
-        rc = self._encrypt_words(pt_words, word_count, self._key_words, self._iv_words, ct_words)
+    def _run_transform_into(self, transform, in_words, out_words, word_count: int, *, operation_name: str) -> None:
+        rc = transform(in_words, word_count, self._key_words, self._iv_words, out_words)
         if rc != 0:
-            raise RuntimeError(f"separ_encrypt_words failed with status {rc}")
+            raise RuntimeError(f"{operation_name} failed with status {rc}")
+
+    def encrypt_words_into(self, pt_words, ct_words, word_count: int) -> None:
+        self._run_transform_into(
+            self._encrypt_words,
+            pt_words,
+            ct_words,
+            word_count,
+            operation_name="separ_encrypt_words",
+        )
+
+    def decrypt_words_into(self, ct_words, pt_words, word_count: int) -> None:
+        self._run_transform_into(
+            self._decrypt_words,
+            ct_words,
+            pt_words,
+            word_count,
+            operation_name="separ_decrypt_words",
+        )
 
     def encrypt_words(self, plaintext_words: Sequence[int]) -> List[int]:
         word_count = len(plaintext_words)
@@ -96,10 +123,22 @@ class SeparLib:
         self.encrypt_words_into(pt_buf, ct_buf, word_count)
         return list(ct_buf)
 
+    def decrypt_words(self, ciphertext_words: Sequence[int]) -> List[int]:
+        word_count = len(ciphertext_words)
+        ct_buf = (ctypes.c_uint16 * word_count)(*ciphertext_words)
+        pt_buf = (ctypes.c_uint16 * word_count)()
+        self.decrypt_words_into(ct_buf, pt_buf, word_count)
+        return list(pt_buf)
+
     def encrypt_hex(self, plaintext_hex: str) -> str:
         plaintext_words = _hex_to_words(plaintext_hex, field_name="plaintext")
         ciphertext_words = self.encrypt_words(plaintext_words)
         return _words_to_hex(ciphertext_words)
+
+    def decrypt_hex(self, ciphertext_hex: str) -> str:
+        ciphertext_words = _hex_to_words(ciphertext_hex, field_name="ciphertext")
+        plaintext_words = self.decrypt_words(ciphertext_words)
+        return _words_to_hex(plaintext_words)
 
 
 # =========================
@@ -188,6 +227,10 @@ def encrypt_hex_mode(lib: SeparLib, plaintext_hex: str) -> None:
     print(lib.encrypt_hex(plaintext_hex))
 
 
+def decrypt_hex_mode(lib: SeparLib, ciphertext_hex: str) -> None:
+    print(lib.decrypt_hex(ciphertext_hex))
+
+
 def encrypt_text_mode(lib: SeparLib, plaintext: str) -> None:
     b = plaintext.encode("utf-8")
     b = _pad_bytes_to_16bit_chunks(b)
@@ -234,6 +277,10 @@ def crack_mode(lib: SeparLib, ciphertext_hex: str, cache_dir: str) -> None:
 
     rec_plain_hex = "".join(recovered)
     print(f"[+] Recovered plaintext (hex): {rec_plain_hex}")
+    dll_plain_hex = lib.decrypt_hex(ciphertext_hex)
+    if dll_plain_hex != rec_plain_hex:
+        raise SystemExit("[!] Codebook recovery does not match separ_decrypt_words for this ciphertext.")
+    print("[+] Verified recovered plaintext against separ_decrypt_words.")
     try:
         raw = bytes.fromhex(rec_plain_hex)
         raw = raw.rstrip(b"\x00")
@@ -254,13 +301,13 @@ def main() -> None:
     ap.add_argument(
         "--mode",
         required=True,
-        choices=["encrypt-hex", "encrypt-text", "crack"],
-        help="encrypt-hex: encrypt hex; encrypt-text: plaintext->hex(+pad)->encrypt; crack: recover plaintext from ciphertext",
+        choices=["encrypt-hex", "decrypt-hex", "encrypt-text", "crack"],
+        help="encrypt-hex: encrypt hex; decrypt-hex: decrypt ciphertext hex; encrypt-text: plaintext->hex(+pad)->encrypt; crack: recover plaintext from ciphertext",
     )
 
     ap.add_argument("--hex", help="Hex string (multiple of 4 hex chars) for encrypt-hex")
     ap.add_argument("--text", help="Plaintext string for encrypt-text (UTF-8; pads with 00 byte if needed)")
-    ap.add_argument("--ciphertext", help="Hex ciphertext (multiple of 4 hex chars) for crack")
+    ap.add_argument("--ciphertext", help="Hex ciphertext (multiple of 4 hex chars) for decrypt-hex or crack")
     ap.add_argument("--key", help="Optional key hex (exactly 64 hex chars; defaults to the library built-in key)")
     ap.add_argument("--iv", help="Optional IV hex (exactly 32 hex chars; defaults to the library built-in IV)")
     ap.add_argument("--cache", default="./cache", help="Directory to cache codebooks (default: ./cache)")
@@ -279,6 +326,12 @@ def main() -> None:
         if args.text is None:
             raise SystemExit("--text required for encrypt-text")
         encrypt_text_mode(lib, args.text)
+        return
+
+    if args.mode == "decrypt-hex":
+        if not args.ciphertext:
+            raise SystemExit("--ciphertext required for decrypt-hex")
+        decrypt_hex_mode(lib, args.ciphertext)
         return
 
     if args.mode == "crack":

@@ -14,7 +14,7 @@ DEFAULT_STAGES = [16, 32, 64, 128, 256]
 
 
 def _default_lib_path() -> str:
-    return "SEPAR/SEPAR.dll"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "SEPAR", "SEPAR.dll")
 
 
 def _normalize_hex_words(hex_string: str, *, expected_words: Optional[int] = None, field_name: str = "hex") -> str:
@@ -91,7 +91,7 @@ def _try_decode_words_as_text(words: Sequence[int]) -> Optional[str]:
 
 class SeparOracle:
     """
-    Local oracle wrapper around separ_encrypt_words.
+    Local wrapper around the SEPAR DLL buffer APIs.
     `query_count` is counted in message-oracle calls, not per encrypted word.
     """
 
@@ -101,45 +101,84 @@ class SeparOracle:
         if not os.path.exists(lib_path):
             raise FileNotFoundError(f"Shared library not found: {lib_path}")
 
-        self._lib = ctypes.CDLL(lib_path)
-        self._encrypt_words = self._lib.separ_encrypt_words
-        self._encrypt_words.argtypes = (
+        self._lib = ctypes.CDLL(os.path.abspath(lib_path))
+        self._encrypt_words = self._bind_transform("separ_encrypt_words")
+        self._decrypt_words = self._bind_transform("separ_decrypt_words")
+
+        self._key_words = self._make_fixed_word_buffer(key_hex, KEY_WORDS, "key") if key_hex else None
+        self.query_count = 0
+
+    def _bind_transform(self, export_name: str):
+        try:
+            transform = getattr(self._lib, export_name)
+        except AttributeError as e:
+            raise RuntimeError(f"Required DLL export not found: {export_name}") from e
+
+        transform.argtypes = (
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.c_size_t,
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.POINTER(ctypes.c_uint16),
             ctypes.POINTER(ctypes.c_uint16),
         )
-        self._encrypt_words.restype = ctypes.c_int
-
-        self._key_words = self._make_fixed_word_buffer(key_hex, KEY_WORDS, "key") if key_hex else None
-        self.query_count = 0
+        transform.restype = ctypes.c_int
+        return transform
 
     @staticmethod
     def _make_fixed_word_buffer(hex_string: str, expected_words: int, field_name: str):
         words = _hex_to_words(hex_string, expected_words=expected_words, field_name=field_name)
         return (ctypes.c_uint16 * expected_words)(*words)
 
-    def encrypt_words(self, plaintext_words: Sequence[int], iv_words: Sequence[int]) -> List[int]:
-        word_count = len(plaintext_words)
+    def _run_transform(
+        self,
+        transform,
+        input_words: Sequence[int],
+        iv_words: Sequence[int],
+        *,
+        operation_name: str,
+    ) -> List[int]:
+        word_count = len(input_words)
         if len(iv_words) != IV_WORDS:
             raise ValueError(f"IV must contain exactly {IV_WORDS} 16-bit words.")
 
-        pt_buf = (ctypes.c_uint16 * word_count)(*plaintext_words)
-        ct_buf = (ctypes.c_uint16 * word_count)()
+        in_buf = (ctypes.c_uint16 * word_count)(*input_words)
+        out_buf = (ctypes.c_uint16 * word_count)()
         iv_buf = (ctypes.c_uint16 * IV_WORDS)(*iv_words)
 
-        rc = self._encrypt_words(pt_buf, word_count, self._key_words, iv_buf, ct_buf)
+        rc = transform(in_buf, word_count, self._key_words, iv_buf, out_buf)
         if rc != 0:
-            raise RuntimeError(f"separ_encrypt_words failed with status {rc}")
+            raise RuntimeError(f"{operation_name} failed with status {rc}")
+
+        return list(out_buf)
+
+    def encrypt_words(self, plaintext_words: Sequence[int], iv_words: Sequence[int]) -> List[int]:
+        ciphertext_words = self._run_transform(
+            self._encrypt_words,
+            plaintext_words,
+            iv_words,
+            operation_name="separ_encrypt_words",
+        )
 
         self.query_count += 1
-        return list(ct_buf)
+        return ciphertext_words
+
+    def decrypt_words(self, ciphertext_words: Sequence[int], iv_words: Sequence[int]) -> List[int]:
+        return self._run_transform(
+            self._decrypt_words,
+            ciphertext_words,
+            iv_words,
+            operation_name="separ_decrypt_words",
+        )
 
     def encrypt_hex(self, plaintext_hex: str, iv_hex: str) -> str:
         pt_words = _hex_to_words(plaintext_hex, field_name="plaintext")
         iv_words = _hex_to_words(iv_hex, expected_words=IV_WORDS, field_name="iv")
         return _words_to_hex(self.encrypt_words(pt_words, iv_words))
+
+    def decrypt_hex(self, ciphertext_hex: str, iv_hex: str) -> str:
+        ct_words = _hex_to_words(ciphertext_hex, field_name="ciphertext")
+        iv_words = _hex_to_words(iv_hex, expected_words=IV_WORDS, field_name="iv")
+        return _words_to_hex(self.decrypt_words(ct_words, iv_words))
 
 
 def score_iv(oracle: SeparOracle, iv_words: Sequence[int], hi_values: Sequence[int]) -> float:
@@ -355,6 +394,12 @@ def run_recover(args: argparse.Namespace) -> None:
 
     recovered_hex = _words_to_hex(recovered_words)
     print(f"[+] Recovered plaintext (hex): {recovered_hex}")
+    dll_plaintext_words = oracle.decrypt_words(ciphertext_words, iv_words)
+    if dll_plaintext_words != recovered_words:
+        raise SystemExit(
+            "[!] Attack output does not match separ_decrypt_words for the same ciphertext/key/IV."
+        )
+    print("[+] Verified recovered plaintext against separ_decrypt_words.")
     decoded = _try_decode_words_as_text(recovered_words)
     if decoded is not None:
         print(f"[+] Recovered plaintext (text): {decoded}")
@@ -418,6 +463,11 @@ def run_demo(args: argparse.Namespace) -> None:
 
     if recovered_words != plaintext_words:
         raise SystemExit("[!] Demo recovery failed.")
+
+    dll_recovered_words = oracle.decrypt_words(ciphertext_words, iv_words)
+    if dll_recovered_words != plaintext_words:
+        raise SystemExit("[!] separ_decrypt_words did not reproduce the demo plaintext.")
+    print("[+] Verified demo ciphertext against separ_decrypt_words.")
 
     decoded = _try_decode_words_as_text(recovered_words)
     if decoded is not None:
