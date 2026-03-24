@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 
 #ifndef ROTL16
@@ -45,6 +46,8 @@ static int hex_nibble(char c);
 static const char *skip_hex_prefix(const char *hex);
 static int parse_hex_words(const char *input, uint16_t *words, size_t expected_words, size_t *parsed_words);
 static void print_hex_words(const uint16_t *words, size_t word_count);
+static int is_mode_arg(const char *arg, int *decrypt_mode);
+static int equals_ignore_case(const char *lhs, const char *rhs);
 
 static const uint16_t default_key[16] = {
     0xE8b9,0xB733,0xDA5d,0x96D7,0x02DD,0x3972,0xE953,0x07FD,
@@ -71,8 +74,6 @@ const uint8_t Separ_isbox4[16] = {4, 11, 2, 5, 13 , 6, 8 ,3 , 7, 14 ,12, 1, 9 ,0
 static inline uint16_t do_sbox(uint16_t X)
 {
     uint8_t a, b, c, d;
-    uint16_t y,z;
-    uint16_t ret;
     
     a = X >> 12;
     b = X >> 8 & 0xf;
@@ -95,7 +96,6 @@ static inline uint16_t do_sbox(uint16_t X)
 static inline uint16_t do_isbox(uint16_t x)
 {
     uint8_t a, b, c, d;
-    uint16_t y,z;
     uint16_t ret;
     
     a = x >> 12;
@@ -382,14 +382,47 @@ SEPAR_EXPORT int separ_encrypt_words(
     return 0;
 }
 
-/* Command-line interface: plaintext is required, while key/IV may be omitted to use defaults. */
+/*
+ * High-throughput FFI entry point for Python/ctypes or other foreign-function callers.
+ * Decrypts `word_count` 16-bit ciphertext words from `ct` into caller-provided `pt`.
+ * If `key` or `iv` is NULL, the built-in defaults are used.
+ * Returns 0 on success and 1 for invalid non-zero-length buffers.
+ */
+SEPAR_EXPORT int separ_decrypt_words(
+    const uint16_t *ct,
+    size_t word_count,
+    const uint16_t *key,
+    const uint16_t *iv,
+    uint16_t *pt)
+{
+    Separ_ctx ctx;
+    const uint16_t *active_key = (key != NULL) ? key : default_key;
+    const uint16_t *active_iv = (iv != NULL) ? iv : default_iv;
+    size_t i;
+
+    if (word_count != 0 && (ct == NULL || pt == NULL)) {
+        return 1;
+    }
+
+    Separ_Initial_State(&ctx, active_key, active_iv);
+    for (i = 0; i < word_count; i++) {
+        pt[i] = Separ_Decryption(ct[i], &ctx, active_key);
+    }
+
+    return 0;
+}
+
+/* Command-line interface: legacy mode encrypts plaintext, and explicit modes may encrypt or decrypt. */
 static void print_usage(const char *program_name)
 {
     fprintf(stderr, "Usage: %s <plaintext_hex> [key_hex] [iv_hex]\n", program_name);
-    fprintf(stderr, "  plaintext_hex: positive multiple of 4 hex chars (16-bit blocks)\n");
+    fprintf(stderr, "       %s encrypt <plaintext_hex> [key_hex] [iv_hex]\n", program_name);
+    fprintf(stderr, "       %s decrypt <ciphertext_hex> [key_hex] [iv_hex]\n", program_name);
+    fprintf(stderr, "  plaintext_hex/ciphertext_hex: positive multiple of 4 hex chars (16-bit blocks)\n");
     fprintf(stderr, "  key_hex:       optional, exactly 64 hex chars (16 x 16-bit words)\n");
     fprintf(stderr, "  iv_hex:        optional, exactly 32 hex chars (8 x 16-bit words)\n");
     fprintf(stderr, "If key_hex or iv_hex are omitted, the built-in defaults are used.\n");
+    fprintf(stderr, "Without an explicit mode, the first form performs encryption for backward compatibility.\n");
 }
 
 static int hex_nibble(char c)
@@ -461,69 +494,108 @@ static void print_hex_words(const uint16_t *words, size_t word_count)
     }
 }
 
+static int equals_ignore_case(const char *lhs, const char *rhs)
+{
+    while (*lhs != '\0' && *rhs != '\0') {
+        if (tolower((unsigned char)*lhs) != tolower((unsigned char)*rhs)) {
+            return 0;
+        }
+        lhs++;
+        rhs++;
+    }
+
+    return *lhs == '\0' && *rhs == '\0';
+}
+
+static int is_mode_arg(const char *arg, int *decrypt_mode)
+{
+    if (equals_ignore_case(arg, "encrypt") || equals_ignore_case(arg, "enc")) {
+        *decrypt_mode = 0;
+        return 1;
+    }
+    if (equals_ignore_case(arg, "decrypt") || equals_ignore_case(arg, "dec")) {
+        *decrypt_mode = 1;
+        return 1;
+    }
+
+    return 0;
+}
+
 /* Command-line driver retained for manual runs and scripting that still wants stdout text output. */
 int main(int argc, char *argv[]) {
 	Separ_ctx ctx ;    //size optimized
 	uint16_t key[16];
 	uint16_t iv[8];
-	uint16_t *pt;
-	uint16_t *ct;
-	uint16_t *ptnext;
-	size_t pt_words = 0;
+	uint16_t *input_words;
+	uint16_t *output_words;
+	size_t word_count = 0;
 	size_t j;
+    size_t input_arg_index = 1;
+    size_t key_arg_index;
+    size_t iv_arg_index;
+    int decrypt_mode = 0;
+    const char *input_label;
+    const char *output_label;
 
     memcpy(key, default_key, sizeof(key));
     memcpy(iv, default_iv, sizeof(iv));
 
-    if (argc < 2 || argc > 4) {
+    if (argc >= 2 && is_mode_arg(argv[1], &decrypt_mode)) {
+        input_arg_index = 2;
+    }
+
+    key_arg_index = input_arg_index + 1;
+    iv_arg_index = input_arg_index + 2;
+
+    if (argc < (int)(input_arg_index + 1) || argc > (int)(input_arg_index + 3)) {
         print_usage(argv[0]);
         return 1;
     }
 
-    if (!parse_hex_words(argv[1], NULL, 0, &pt_words)) {
-        fprintf(stderr, "Invalid plaintext. Expected a positive multiple of 4 hex chars.\n");
+    input_label = decrypt_mode ? "CT" : "PT";
+    output_label = decrypt_mode ? "PT" : "CT";
+
+    if (!parse_hex_words(argv[input_arg_index], NULL, 0, &word_count)) {
+        fprintf(stderr, "Invalid %s. Expected a positive multiple of 4 hex chars.\n",
+                decrypt_mode ? "ciphertext" : "plaintext");
         print_usage(argv[0]);
         return 1;
     }
 
-    pt = (uint16_t *)malloc(pt_words * sizeof(uint16_t));
-    ct = (uint16_t *)malloc(pt_words * sizeof(uint16_t));
-    ptnext = (uint16_t *)malloc(pt_words * sizeof(uint16_t));
+    input_words = (uint16_t *)malloc(word_count * sizeof(uint16_t));
+    output_words = (uint16_t *)malloc(word_count * sizeof(uint16_t));
 
-    if (pt == NULL || ct == NULL || ptnext == NULL) {
+    if (input_words == NULL || output_words == NULL) {
         fprintf(stderr, "Memory allocation failed.\n");
-        free(pt);
-        free(ct);
-        free(ptnext);
+        free(input_words);
+        free(output_words);
         return 1;
     }
 
-    if (!parse_hex_words(argv[1], pt, 0, &pt_words)) {
-        fprintf(stderr, "Invalid plaintext. Expected a positive multiple of 4 hex chars.\n");
-        free(pt);
-        free(ct);
-        free(ptnext);
+    if (!parse_hex_words(argv[input_arg_index], input_words, 0, &word_count)) {
+        fprintf(stderr, "Invalid %s. Expected a positive multiple of 4 hex chars.\n",
+                decrypt_mode ? "ciphertext" : "plaintext");
+        free(input_words);
+        free(output_words);
         return 1;
     }
 
-    if (argc >= 3) {
-        if (!parse_hex_words(argv[2], key, 16, NULL)) {
+    if (argc >= (int)(key_arg_index + 1)) {
+        if (!parse_hex_words(argv[key_arg_index], key, 16, NULL)) {
             fprintf(stderr, "Invalid key. Expected exactly 64 hex chars.\n");
             print_usage(argv[0]);
-            free(pt);
-            free(ct);
-            free(ptnext);
+            free(input_words);
+            free(output_words);
             return 1;
         }
     }
 
-    if (argc >= 4) {
-        if (!parse_hex_words(argv[3], iv, 8, NULL)) {
+    if (argc >= (int)(iv_arg_index + 1)) {
+        if (!parse_hex_words(argv[iv_arg_index], iv, 8, NULL)) {
             fprintf(stderr, "Invalid IV. Expected exactly 32 hex chars.\n");
             print_usage(argv[0]);
-            free(pt);
-            free(ct);
-            free(ptnext);
+            free(input_words);
+            free(output_words);
             return 1;
         }
     }
@@ -535,24 +607,20 @@ int main(int argc, char *argv[]) {
     printf("IV is:");
     print_hex_words(iv, 8);
     Separ_Initial_State(&ctx, key, iv);
-    //encryption***************
-	for (j = 0; j < pt_words; j++) 
-           ct[j] = Separ_Encryption(pt[j], &ctx,key);
-            
-    //decryption***************
-	Separ_Initial_State(&ctx, key, iv);
-	for (j = 0; j < pt_words; j++) 
-            ptnext[j] = Separ_Decryption(ct[j], &ctx,key);
     printf("\n");
-    printf("PT is:");
-    print_hex_words(ptnext, pt_words);
+    printf("%s is:", input_label);
+    print_hex_words(input_words, word_count);
     printf("\n");
-	printf("CT is:");
-    print_hex_words(ct, pt_words);
+    for (j = 0; j < word_count; j++) {
+        output_words[j] = decrypt_mode
+            ? Separ_Decryption(input_words[j], &ctx, key)
+            : Separ_Encryption(input_words[j], &ctx, key);
+    }
+	printf("%s is:", output_label);
+    print_hex_words(output_words, word_count);
     printf("\n");
 
-    free(pt);
-    free(ct);
-    free(ptnext);
+    free(input_words);
+    free(output_words);
 	return 0;
  }
