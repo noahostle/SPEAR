@@ -299,3 +299,71 @@ def build_matched_context_codebook(prefix_words, key_words=None, iv_words=None, 
         ct = oracle.encrypt_words(prefix_words + [x], key_words, iv_words)
         table[x] = ct[-1]
     return prefix_ct, table
+
+
+def separ_initial_ctx(key_words=None, iv_words=None):
+    if key_words is None:
+        key_words = list(DEFAULT_KEY)
+    if iv_words is None:
+        iv_words = list(DEFAULT_IV)
+
+    state = list(iv_words)
+    ct = 0
+    for _ in range(4):
+        v12 = enc_block((state[0] + state[2] + state[4] + state[6]) & 0xFFFF, (key_words[0], key_words[1]), 1)
+        v23 = enc_block((v12 + state[1]) & 0xFFFF, (key_words[2], key_words[3]), 2)
+        v34 = enc_block((v23 + state[2]) & 0xFFFF, (key_words[4], key_words[5]), 3)
+        v45 = enc_block((v34 + state[3]) & 0xFFFF, (key_words[6], key_words[7]), 4)
+        v56 = enc_block((v45 + state[4]) & 0xFFFF, (key_words[8], key_words[9]), 5)
+        v67 = enc_block((v56 + state[5]) & 0xFFFF, (key_words[10], key_words[11]), 6)
+        v78 = enc_block((v67 + state[6]) & 0xFFFF, (key_words[12], key_words[13]), 7)
+        ct = enc_block((v78 + state[7]) & 0xFFFF, (key_words[14], key_words[15]), 8)
+
+        state[0] = (state[0] + ct) & 0xFFFF
+        state[1] = (state[1] + v12) & 0xFFFF
+        state[2] = (state[2] + v23) & 0xFFFF
+        state[3] = (state[3] + v34) & 0xFFFF
+        state[4] = (state[4] + v45) & 0xFFFF
+        state[5] = (state[5] + v56) & 0xFFFF
+        state[6] = (state[6] + v67) & 0xFFFF
+        state[7] = (state[7] + v78) & 0xFFFF
+
+    return {"state": state, "lfsr": (ct | 0x100) & 0xFFFF}
+
+
+def separ_encrypt_word(pt, ctx, key_words):
+    state = ctx["state"]
+
+    v12 = enc_block((pt + state[0]) & 0xFFFF, (key_words[0], key_words[1]), 1)
+    v23 = enc_block((v12 + state[1]) & 0xFFFF, (key_words[2], key_words[3]), 2)
+    v34 = enc_block((v23 + state[2]) & 0xFFFF, (key_words[4], key_words[5]), 3)
+    v45 = enc_block((v34 + state[3]) & 0xFFFF, (key_words[6], key_words[7]), 4)
+    v56 = enc_block((v45 + state[4]) & 0xFFFF, (key_words[8], key_words[9]), 5)
+    v67 = enc_block((v56 + state[5]) & 0xFFFF, (key_words[10], key_words[11]), 6)
+    v78 = enc_block((v67 + state[6]) & 0xFFFF, (key_words[12], key_words[13]), 7)
+    ct = enc_block((v78 + state[7]) & 0xFFFF, (key_words[14], key_words[15]), 8)
+
+    state[1] = (state[1] + v12 + v56 + state[5]) & 0xFFFF
+    state[2] = (state[2] + v23 + v34 + state[3] + state[0]) & 0xFFFF
+    state[3] = (state[3] + v12 + v45 + state[7]) & 0xFFFF
+    state[4] = (state[4] + v23) & 0xFFFF
+    state[5] = (state[5] + v12 + v45 + state[6]) & 0xFFFF
+    state[6] = (state[6] + v23 + v67) & 0xFFFF
+    state[7] = (state[7] + v45) & 0xFFFF
+    state[0] = (state[0] + v34 + v23 + state[4] + v78) & 0xFFFF
+    ctx["lfsr"] = ((ctx["lfsr"] >> 1) ^ ((-(ctx["lfsr"] & 1)) & 0xCA44)) & 0xFFFF
+    state[4] = (state[4] + ctx["lfsr"]) & 0xFFFF
+
+    return ct
+
+
+def separ_ctx_after_prefix(prefix_words, key_words=None, iv_words=None):
+    if key_words is None:
+        key_words = list(DEFAULT_KEY)
+    if iv_words is None:
+        iv_words = list(DEFAULT_IV)
+
+    ctx = separ_initial_ctx(key_words, iv_words)
+    for pt in prefix_words:
+        separ_encrypt_word(pt, ctx, key_words)
+    return ctx
