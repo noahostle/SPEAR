@@ -228,7 +228,18 @@ def best_count(table, input_diff, mode):
 class SeparOracle:
     def __init__(self, dll_path=None):
         if dll_path is None:
-            dll_path = Path(__file__).resolve().parent / "SEPAR" / "SEPAR.dll"
+            here = Path(__file__).resolve()
+            candidates = [
+                here.parent / "SEPAR" / "SEPAR.dll",
+                here.parent.parent / "SEPAR" / "SEPAR.dll",
+                here.parent.parent.parent / "SEPAR" / "SEPAR.dll",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    dll_path = candidate
+                    break
+            else:
+                raise FileNotFoundError("could not locate SEPAR/SEPAR.dll relative to separ_analysis_common.py")
         self.lib = ctypes.CDLL(str(dll_path))
 
         self.enc = self.lib.separ_encrypt_words
