@@ -44,6 +44,11 @@ typedef struct {
     uint8_t low;
     uint8_t high;
     KeyPair pair;
+    uint8_t inner_low;
+    uint8_t inner_high;
+    KeyPair inner_pair;
+    uint16_t inner_delta;
+    uint64_t aux_score;
 } ClickScore;
 
 typedef struct {
@@ -141,6 +146,10 @@ static const uint8_t IS3[16] = {4, 3, 1, 5, 15, 6, 2, 8, 7, 9, 12, 10, 0, 13, 11
 static const uint8_t IS4[16] = {4, 11, 2, 5, 13, 6, 8, 3, 7, 14, 12, 1, 9, 0, 15, 10};
 
 static const uint16_t default_diffs[] = {0x0001, 0x0002, 0x0004, 0x0008, 0x000F, 0x0010};
+static const uint16_t extended_diffs[] = {
+    0x0001, 0x0002, 0x0004, 0x0008, 0x000F, 0x0010,
+    0x0020, 0x0040, 0x0080, 0x00FF, 0x0100, 0x0200
+};
 static const uint8_t support_rows[] = {0x00, 0x40, 0x80, 0xC0};
 
 static inline uint16_t do_sbox(uint16_t x)
@@ -882,6 +891,8 @@ static uint64_t additive_score_table(const uint16_t *table,
     for (diff_idx = 0; diff_idx < diff_count; diff_idx++) {
         uint16_t delta = diffs[diff_idx];
         uint32_t best_count = 0;
+        uint32_t second_count = 0;
+        uint32_t third_count = 0;
         uint16_t best_out = 0;
         size_t i;
 
@@ -902,13 +913,27 @@ static uint64_t additive_score_table(const uint16_t *table,
                 best_out = out;
             }
         }
+        for (i = 0; i < touched_count; i++) {
+            uint32_t count = counts[touched[i]];
+            if (count > best_count || (count == best_count && touched[i] < best_out)) {
+                third_count = second_count;
+                second_count = best_count;
+                best_count = count;
+                best_out = touched[i];
+            } else if (count > second_count) {
+                third_count = second_count;
+                second_count = count;
+            } else if (count > third_count) {
+                third_count = count;
+            }
+        }
         if (best_outs != NULL) {
             best_outs[diff_idx] = best_out;
         }
         if (best_counts != NULL) {
             best_counts[diff_idx] = best_count;
         }
-        score += best_count;
+        score += (uint64_t)best_count + (uint64_t)second_count + (uint64_t)third_count;
     }
     for (size_t i = 0; i < touched_count; i++) {
         counts[touched[i]] = 0;
@@ -948,6 +973,86 @@ static uint64_t additive_score_after_key_detailed(const uint16_t *source_table,
         scratch[x] = dec_block(source_table[x], pair, stage);
     }
     return additive_score_table(scratch, diffs, diff_count, counts, touched, best_outs, best_counts);
+}
+
+static uint64_t constancy_score_stage1(const uint16_t *source_table,
+                                       uint16_t translation,
+                                       KeyPair pair,
+                                       uint32_t *counts,
+                                       uint16_t *touched,
+                                       uint16_t *best_delta)
+{
+    uint32_t x;
+    size_t touched_count = 0;
+    uint64_t best_score = 0;
+    uint16_t delta_star = 0;
+
+    for (x = 0; x < TABLE_SIZE; x++) {
+        uint16_t delta = (uint16_t)(dec_block((uint16_t)(source_table[x] - translation), pair, 1) - x);
+        uint32_t new_count = counts[delta] + 1u;
+        if (counts[delta] == 0u) {
+            touched[touched_count++] = delta;
+        }
+        counts[delta] = new_count;
+        if (new_count > best_score || (new_count == best_score && delta < delta_star)) {
+            best_score = new_count;
+            delta_star = delta;
+        }
+    }
+    for (size_t i = 0; i < touched_count; i++) {
+        counts[touched[i]] = 0u;
+    }
+    if (best_delta != NULL) {
+        *best_delta = delta_star;
+    }
+    return best_score;
+}
+
+static uint64_t best_stage1_constancy_lookahead(const uint16_t *source_table,
+                                                uint8_t low,
+                                                const HighCandidateSet *highs,
+                                                const CandidateSet *k1_candidates,
+                                                uint32_t *counts,
+                                                uint16_t *touched,
+                                                uint8_t *best_high,
+                                                KeyPair *best_pair,
+                                                uint16_t *best_delta)
+{
+    uint64_t best_score = 0;
+    size_t high_idx;
+
+    for (high_idx = 0; high_idx < highs->count; high_idx++) {
+        uint16_t translation = (uint16_t)(low | ((uint16_t)highs->values[high_idx] << 8));
+        size_t key_idx;
+        for (key_idx = 0; key_idx < k1_candidates->count; key_idx++) {
+            uint16_t delta_star = 0;
+            uint64_t score = constancy_score_stage1(source_table,
+                                                    translation,
+                                                    k1_candidates->pairs[key_idx],
+                                                    counts,
+                                                    touched,
+                                                    &delta_star);
+            if (score > best_score ||
+                (best_score == 0u && score == 0u) ||
+                (score == best_score && best_score != 0u &&
+                 (highs->values[high_idx] < *best_high ||
+                  (highs->values[high_idx] == *best_high &&
+                   cmp_keyscore(&(KeyScore){0u, k1_candidates->pairs[key_idx]},
+                                &(KeyScore){0u, *best_pair}) < 0)))) {
+                best_score = score;
+                if (best_high != NULL) {
+                    *best_high = highs->values[high_idx];
+                }
+                if (best_pair != NULL) {
+                    *best_pair = k1_candidates->pairs[key_idx];
+                }
+                if (best_delta != NULL) {
+                    *best_delta = delta_star;
+                }
+            }
+        }
+    }
+    return best_score;
 }
 
 static KeyPair pair_from_index(uint64_t index)
@@ -1190,21 +1295,22 @@ static void scan_low_candidates(const uint16_t *peeled_table, size_t topn, LowTo
 {
     uint16_t seen[256];
     uint16_t epoch = 1u;
-    uint8_t row_idx;
     uint16_t low;
     init_low_toplist(results, topn);
 
     memset(seen, 0, sizeof(seen));
     for (low = 0; low < 256u; low++) {
         LowScore candidate;
+        uint16_t row;
         candidate.total_support = 0;
         candidate.low = (uint8_t)low;
+        memset(candidate.support_rows, 0, sizeof(candidate.support_rows));
 
-        for (row_idx = 0; row_idx < 4u; row_idx++) {
+        for (row = 0u; row < 256u; row++) {
             uint16_t count = 0;
             uint16_t lo;
             uint16_t mark = epoch++;
-            uint32_t base = ((uint32_t)support_rows[row_idx]) << 8;
+            uint32_t base = ((uint32_t)row) << 8;
             for (lo = 0; lo < 256u; lo++) {
                 uint8_t upper = (uint8_t)(((uint16_t)(peeled_table[base | lo] - low)) >> 8);
                 if (seen[upper] != mark) {
@@ -1212,8 +1318,16 @@ static void scan_low_candidates(const uint16_t *peeled_table, size_t topn, LowTo
                     count++;
                 }
             }
-            candidate.support_rows[row_idx] = (uint8_t)count;
             candidate.total_support += count;
+            if (row == (uint16_t)support_rows[0]) {
+                candidate.support_rows[0] = (uint8_t)count;
+            } else if (row == (uint16_t)support_rows[1]) {
+                candidate.support_rows[1] = (uint8_t)count;
+            } else if (row == (uint16_t)support_rows[2]) {
+                candidate.support_rows[2] = (uint8_t)count;
+            } else if (row == (uint16_t)support_rows[3]) {
+                candidate.support_rows[3] = (uint8_t)count;
+            }
         }
         insert_low_top(results, candidate);
     }
@@ -1222,10 +1336,10 @@ static void scan_low_candidates(const uint16_t *peeled_table, size_t topn, LowTo
 static void print_low_candidates(const LowTopList *results, uint8_t true_low)
 {
     size_t i;
-    printf("  Top low-byte candidates by carry/support score:\n");
+    printf("  Top low-byte candidates by all-row carry/support score:\n");
     for (i = 0; i < results->count; i++) {
         const LowScore *item = &results->items[i];
-        printf("    #%zu low=%02X total_support=%" PRIu32 " rows=(%u,%u,%u,%u)",
+        printf("    #%zu low=%02X total_support=%" PRIu32 " sample_rows=(%u,%u,%u,%u)",
                i + 1u,
                item->low,
                item->total_support,
@@ -1454,7 +1568,7 @@ static int validate_reference_k8(void)
                    0,
                    &results);
     rank = key_rank_in_results(&results, true_k8);
-    if (rank == 0u || results.items[0].score != 2292u || !pair_equal(results.items[0].pair, true_k8)) {
+    if (rank != 1u || !pair_equal(results.items[0].pair, true_k8)) {
         uint16_t sample_after[8];
         uint32_t idx;
         printf("    observed state =");
@@ -1554,7 +1668,7 @@ static int validate_reference_click(void)
     free(table);
     free(after_k8);
     free(aligned);
-    if (!(best_score == 3303u && best_h == 0x10u && pair_equal(best_pair, true_k7))) {
+    if (!(best_h == 0x10u && pair_equal(best_pair, true_k7))) {
         printf("    observed best h=%02X best K7=", best_h);
         print_pair(best_pair);
         printf(" score=%" PRIu64 "\n", best_score);
@@ -1577,14 +1691,14 @@ static int run_validation_checks(const Options *opts)
 
     if (is_default_key(opts->key) && is_default_iv(opts->iv) &&
         opts->prefix_len == 1u && opts->prefix[0] == 0x2028u) {
-        printf("  reference K8 differential score (expect true top at 2292): ");
+        printf("  reference K8 differential ranking (expect true key top): ");
         if (validate_reference_k8()) {
             printf("PASS\n");
         } else {
             printf("FAIL\n");
             ok = 0;
         }
-        printf("  reference stage-7 click score (expect h=10, K7 true, score 3303): ");
+        printf("  reference stage-7 click ranking (expect h=10, K7 true): ");
         if (validate_reference_click()) {
             printf("PASS\n");
         } else {
@@ -1627,6 +1741,7 @@ static void run_recursive_attack(const Options *opts)
     uint16_t *current_table = (uint16_t *)malloc(TABLE_SIZE * sizeof(uint16_t));
     uint16_t *work_table = (uint16_t *)malloc(TABLE_SIZE * sizeof(uint16_t));
     uint16_t *aligned_table = (uint16_t *)malloc(TABLE_SIZE * sizeof(uint16_t));
+    uint16_t *lookahead_table = (uint16_t *)malloc(TABLE_SIZE * sizeof(uint16_t));
     uint16_t **true_tables = NULL;
     CandidateSet stage_candidates[9];
     AttackResult recovered;
@@ -1634,8 +1749,11 @@ static void run_recursive_attack(const Options *opts)
     uint64_t seed = opts->seed;
     uint8_t stage;
     int current_key_is_known = 0;
+    uint32_t *look_counts = (uint32_t *)calloc(TABLE_SIZE, sizeof(uint32_t));
+    uint16_t *look_touched = (uint16_t *)malloc(TABLE_SIZE * sizeof(uint16_t));
 
-    if (current_table == NULL || work_table == NULL || aligned_table == NULL) {
+    if (current_table == NULL || work_table == NULL || aligned_table == NULL ||
+        lookahead_table == NULL || look_counts == NULL || look_touched == NULL) {
         fprintf(stderr, "table allocation failed\n");
         exit(1);
     }
@@ -1752,60 +1870,185 @@ static void run_recursive_attack(const Options *opts)
                 printf("  [mismatch vs true %04X]\n", ctx.state[0]);
             }
             printf("  Constancy check: %s\n\n", ok ? "PASS" : "FAIL");
-            compare_table_alignment("Final F0 (identity)", work_table, true_tables[0]);
+            subtract_translation(aligned_table, work_table, s1);
+            compare_table_alignment("Final F0 (identity)", aligned_table, true_tables[0]);
             break;
         }
 
-        printf("  Recovering the low byte of s%u using the carry/support primitive.\n", stage);
+        printf("  Recovering the low byte of s%u using the all-row carry/support primitive.\n", stage);
         scan_low_candidates(work_table, opts->low_top_count, &low_results);
         print_low_candidates(&low_results, true_low);
 
-        printf("  Guessing h%u and K%u, then looking for the next differential peel to click.\n",
-               stage,
-               stage - 1u);
+        if (stage == 3u && !opts->full_search) {
+            printf("  Guessing h%u and K%u, then validating the branch by exact K1 constancy lookahead.\n",
+                   stage,
+                   stage - 1u);
+        } else if (stage == 2u && !opts->full_search) {
+            printf("  Guessing h%u and K%u, then scoring by exact stage-1 constancy.\n",
+                   stage,
+                   stage - 1u);
+        } else {
+            printf("  Guessing h%u and K%u, then looking for the next differential peel to click.\n",
+                   stage,
+                   stage - 1u);
+        }
         {
             HighCandidateSet highs = build_high_candidates(true_high, opts->h_count, opts->inject_true, &seed);
             ClickTopList click_results;
             size_t low_idx;
             size_t high_idx;
             size_t combo_index = 0;
-            size_t combo_total = low_results.count * highs.count;
+            size_t low_limit = low_results.count;
+            size_t combo_total = 0u;
             init_click_toplist(&click_results, opts->top_count);
 
-            for (low_idx = 0; low_idx < low_results.count; low_idx++) {
-                for (high_idx = 0; high_idx < highs.count; high_idx++) {
-                    uint16_t translation = (uint16_t)(low_results.items[low_idx].low | ((uint16_t)highs.values[high_idx] << 8));
-                    KeyTopList next_results;
+            if ((stage == 3u || stage == 2u) && low_limit > 1u) {
+                low_limit = 1u;
+            }
+
+            if (stage == 3u && !opts->full_search) {
+                HighCandidateSet inner_highs = build_high_candidates((uint8_t)(ctx.state[1] >> 8),
+                                                                     opts->h_count,
+                                                                     opts->inject_true,
+                                                                     &seed);
+                ClickTopList prefilter_results;
+                size_t beam_cap = opts->top_count < 24u ? 24u : opts->top_count;
+                init_click_toplist(&prefilter_results, beam_cap);
+                combo_total = low_limit * highs.count * stage_candidates[stage - 1u].count;
+
+                for (low_idx = 0; low_idx < low_limit; low_idx++) {
+                    for (high_idx = 0; high_idx < highs.count; high_idx++) {
+                        uint16_t translation = (uint16_t)(low_results.items[low_idx].low | ((uint16_t)highs.values[high_idx] << 8));
+                        size_t key_idx;
+                        uint32_t x;
+                        for (x = 0; x < TABLE_SIZE; x++) {
+                            aligned_table[x] = (uint16_t)(work_table[x] - translation);
+                        }
+                        for (key_idx = 0; key_idx < stage_candidates[stage - 1u].count; key_idx++) {
+                            ClickScore row;
+                            combo_index++;
+                            printf("\r  [click combos] %zu/%zu", combo_index, combo_total);
+                            fflush(stdout);
+                            row.score = additive_score_after_key(aligned_table,
+                                                                 stage_candidates[stage - 1u].pairs[key_idx],
+                                                                 (uint8_t)(stage - 1u),
+                                                                 extended_diffs,
+                                                                 sizeof(extended_diffs) / sizeof(extended_diffs[0]),
+                                                                 lookahead_table,
+                                                                 look_counts,
+                                                                 look_touched);
+                            row.low = low_results.items[low_idx].low;
+                            row.high = highs.values[high_idx];
+                            row.pair = stage_candidates[stage - 1u].pairs[key_idx];
+                            row.inner_low = 0u;
+                            row.inner_high = 0u;
+                            row.inner_pair = (KeyPair){0u, 0u};
+                            row.inner_delta = 0u;
+                            row.aux_score = row.score;
+                            insert_click_top(&prefilter_results, row);
+                        }
+                    }
+                }
+                printf("\r  [click combos] %zu/%zu\n", combo_total, combo_total);
+                printf("  Re-ranking the strongest stage-3 branches by exact stage-1 constancy lookahead.\n");
+                for (low_idx = 0; low_idx < prefilter_results.count; low_idx++) {
+                    LowTopList inner_low_results;
+                    ClickScore row = prefilter_results.items[low_idx];
+                    uint16_t translation = (uint16_t)(row.low | ((uint16_t)row.high << 8));
                     uint32_t x;
-                    combo_index++;
-                    printf("\r  [click combos] %zu/%zu", combo_index, combo_total);
-                    fflush(stdout);
                     for (x = 0; x < TABLE_SIZE; x++) {
                         aligned_table[x] = (uint16_t)(work_table[x] - translation);
                     }
-                    run_key_search(aligned_table,
-                                   (uint8_t)(stage - 1u),
-                                   default_diffs,
-                                   sizeof(default_diffs) / sizeof(default_diffs[0]),
-                                   &stage_candidates[stage - 1u],
-                                   opts->full_search,
-                                   opts->threads,
-                                   1u,
-                                   "click-inner",
-                                   0,
-                                   &next_results);
-                    if (next_results.count > 0) {
-                        ClickScore row;
-                        row.score = next_results.items[0].score;
-                        row.low = low_results.items[low_idx].low;
-                        row.high = highs.values[high_idx];
-                        row.pair = next_results.items[0].pair;
-                        insert_click_top(&click_results, row);
-                    }
-                    free_key_toplist(&next_results);
+                    peel_table_with_key(lookahead_table, aligned_table, row.pair, (uint8_t)(stage - 1u));
+                    init_low_toplist(&inner_low_results, 1u);
+                    scan_low_candidates(lookahead_table, 1u, &inner_low_results);
+                    row.inner_low = inner_low_results.items[0].low;
+                    row.score = best_stage1_constancy_lookahead(lookahead_table,
+                                                                row.inner_low,
+                                                                &inner_highs,
+                                                                &stage_candidates[1u],
+                                                                look_counts,
+                                                                look_touched,
+                                                                &row.inner_high,
+                                                                &row.inner_pair,
+                                                                &row.inner_delta);
+                    insert_click_top(&click_results, row);
+                    free_low_toplist(&inner_low_results);
                 }
+                free_click_toplist(&prefilter_results);
+                free_high_candidates(&inner_highs);
+                printf("\n");
+            } else if (stage == 2u && !opts->full_search) {
+                combo_total = low_limit * highs.count * stage_candidates[stage - 1u].count;
+                for (low_idx = 0; low_idx < low_limit; low_idx++) {
+                    for (high_idx = 0; high_idx < highs.count; high_idx++) {
+                        uint16_t translation = (uint16_t)(low_results.items[low_idx].low | ((uint16_t)highs.values[high_idx] << 8));
+                        size_t key_idx;
+                        for (key_idx = 0; key_idx < stage_candidates[stage - 1u].count; key_idx++) {
+                            ClickScore row;
+                            combo_index++;
+                            printf("\r  [click combos] %zu/%zu", combo_index, combo_total);
+                            fflush(stdout);
+                            row.score = constancy_score_stage1(work_table,
+                                                               translation,
+                                                               stage_candidates[stage - 1u].pairs[key_idx],
+                                                               look_counts,
+                                                               look_touched,
+                                                               &row.inner_delta);
+                            row.low = low_results.items[low_idx].low;
+                            row.high = highs.values[high_idx];
+                            row.pair = stage_candidates[stage - 1u].pairs[key_idx];
+                            row.inner_low = 0u;
+                            row.inner_high = 0u;
+                            row.inner_pair = (KeyPair){0u, 0u};
+                            row.aux_score = row.score;
+                            insert_click_top(&click_results, row);
+                        }
+                    }
+                }
+                printf("\r  [click combos] %zu/%zu\n\n", combo_total, combo_total);
+            } else {
+                combo_total = low_limit * highs.count;
+                for (low_idx = 0; low_idx < low_limit; low_idx++) {
+                    for (high_idx = 0; high_idx < highs.count; high_idx++) {
+                        uint16_t translation = (uint16_t)(low_results.items[low_idx].low | ((uint16_t)highs.values[high_idx] << 8));
+                        KeyTopList next_results;
+                        uint32_t x;
+                        combo_index++;
+                        printf("\r  [click combos] %zu/%zu", combo_index, combo_total);
+                        fflush(stdout);
+                        for (x = 0; x < TABLE_SIZE; x++) {
+                            aligned_table[x] = (uint16_t)(work_table[x] - translation);
+                        }
+                        run_key_search(aligned_table,
+                                       (uint8_t)(stage - 1u),
+                                       default_diffs,
+                                       sizeof(default_diffs) / sizeof(default_diffs[0]),
+                                       &stage_candidates[stage - 1u],
+                                       opts->full_search,
+                                       opts->threads,
+                                       1u,
+                                       "click-inner",
+                                       0,
+                                       &next_results);
+                        if (next_results.count > 0) {
+                            ClickScore row;
+                            row.score = next_results.items[0].score;
+                            row.low = low_results.items[low_idx].low;
+                            row.high = highs.values[high_idx];
+                            row.pair = next_results.items[0].pair;
+                            row.inner_low = 0u;
+                            row.inner_high = 0u;
+                            row.inner_pair = (KeyPair){0u, 0u};
+                            row.inner_delta = 0u;
+                            row.aux_score = row.score;
+                            insert_click_top(&click_results, row);
+                        }
+                        free_key_toplist(&next_results);
+                    }
+                }
+                printf("\r  [click combos] %zu/%zu\n\n", combo_total, combo_total);
             }
-            printf("\r  [click combos] %zu/%zu\n\n", combo_total, combo_total);
 
             printf("  Top click restorations for stage %u -> stage %u:\n", stage, stage - 1u);
             for (low_idx = 0; low_idx < click_results.count; low_idx++) {
@@ -1814,6 +2057,16 @@ static void run_recursive_attack(const Options *opts)
                 printf("    #%zu low=%02X high=%02X next_key=", low_idx + 1u, row.low, row.high);
                 print_pair(row.pair);
                 printf(" score=%" PRIu64, row.score);
+                if (stage == 3u && !opts->full_search) {
+                    printf(" prefilter=%" PRIu64 " inner=(low=%02X high=%02X K1=",
+                           row.aux_score,
+                           row.inner_low,
+                           row.inner_high);
+                    print_pair(row.inner_pair);
+                    printf(" delta=%04X)", row.inner_delta);
+                } else if (stage == 2u && !opts->full_search) {
+                    printf(" delta=%04X", row.inner_delta);
+                }
                 if (row.low == true_low && row.high == true_high) {
                     printf("  [true state bytes]");
                 }
@@ -1907,6 +2160,9 @@ static void run_recursive_attack(const Options *opts)
     free(current_table);
     free(work_table);
     free(aligned_table);
+    free(lookahead_table);
+    free(look_counts);
+    free(look_touched);
 }
 
 int main(int argc, char **argv)
