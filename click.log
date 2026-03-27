@@ -1,371 +1,0 @@
-SEPAR recursive context-matching + differential click harness
-  prefix   = 2028
-  threads  = 16
-  shortlist= validation shortlist (candidate-count=12, h-count=8, low-top=16)
-
-Validation checks:
-  local roundtrip: PASS
-  reference K8 differential score (expect true top at 2292): PASS
-  reference stage-7 click score (expect h=10, K7 true, score 3303): PASS
-
-[codebook] 0/65536[codebook] 512/65536[codebook] 1024/65536[codebook] 1536/65536[codebook] 2048/65536[codebook] 2560/65536[codebook] 3072/65536[codebook] 3584/65536[codebook] 4096/65536[codebook] 4608/65536[codebook] 5120/65536[codebook] 5632/65536[codebook] 6144/65536[codebook] 6656/65536[codebook] 7168/65536[codebook] 7680/65536[codebook] 8192/65536[codebook] 8704/65536[codebook] 9216/65536[codebook] 9728/65536[codebook] 10240/65536[codebook] 10752/65536[codebook] 11264/65536[codebook] 11776/65536[codebook] 12288/65536[codebook] 12800/65536[codebook] 13312/65536[codebook] 13824/65536[codebook] 14336/65536[codebook] 14848/65536[codebook] 15360/65536[codebook] 15872/65536[codebook] 16384/65536[codebook] 16896/65536[codebook] 17408/65536[codebook] 17920/65536[codebook] 18432/65536[codebook] 18944/65536[codebook] 19456/65536[codebook] 19968/65536[codebook] 20480/65536[codebook] 20992/65536[codebook] 21504/65536[codebook] 22016/65536[codebook] 22528/65536[codebook] 23040/65536[codebook] 23552/65536[codebook] 24064/65536[codebook] 24576/65536[codebook] 25088/65536[codebook] 25600/65536[codebook] 26112/65536[codebook] 26624/65536[codebook] 27136/65536[codebook] 27648/65536[codebook] 28160/65536[codebook] 28672/65536[codebook] 29184/65536[codebook] 29696/65536[codebook] 30208/65536[codebook] 30720/65536[codebook] 31232/65536[codebook] 31744/65536[codebook] 32256/65536[codebook] 32768/65536[codebook] 33280/65536[codebook] 33792/65536[codebook] 34304/65536[codebook] 34816/65536[codebook] 35328/65536[codebook] 35840/65536[codebook] 36352/65536[codebook] 36864/65536[codebook] 37376/65536[codebook] 37888/65536[codebook] 38400/65536[codebook] 38912/65536[codebook] 39424/65536[codebook] 39936/65536[codebook] 40448/65536[codebook] 40960/65536[codebook] 41472/65536[codebook] 41984/65536[codebook] 42496/65536[codebook] 43008/65536[codebook] 43520/65536[codebook] 44032/65536[codebook] 44544/65536[codebook] 45056/65536[codebook] 45568/65536[codebook] 46080/65536[codebook] 46592/65536[codebook] 47104/65536[codebook] 47616/65536[codebook] 48128/65536[codebook] 48640/65536[codebook] 49152/65536[codebook] 49664/65536[codebook] 50176/65536[codebook] 50688/65536[codebook] 51200/65536[codebook] 51712/65536[codebook] 52224/65536[codebook] 52736/65536[codebook] 53248/65536[codebook] 53760/65536[codebook] 54272/65536[codebook] 54784/65536[codebook] 55296/65536[codebook] 55808/65536[codebook] 56320/65536[codebook] 56832/65536[codebook] 57344/65536[codebook] 57856/65536[codebook] 58368/65536[codebook] 58880/65536[codebook] 59392/65536[codebook] 59904/65536[codebook] 60416/65536[codebook] 60928/65536[codebook] 61440/65536[codebook] 61952/65536[codebook] 62464/65536[codebook] 62976/65536[codebook] 63488/65536[codebook] 64000/65536[codebook] 64512/65536[codebook] 65024/65536[codebook] 65536/65536
-True stage keys and current matched-context states:
-  K1 = (E8B9, B733)   s1 = 1F4E (low=4E high=1F)
-  K2 = (DA5D, 96D7)   s2 = 0A00 (low=00 high=0A)
-  K3 = (02DD, 3972)   s3 = 4208 (low=08 high=42)
-  K4 = (E953, 07FD)   s4 = 8911 (low=11 high=89)
-  K5 = (50C5, 12DB)   s5 = F6F1 (low=F1 high=F6)
-  K6 = (F44A, 233E)   s6 = 1D05 (low=05 high=1D)
-  K7 = (8D1E, 9DF5)   s7 = EDB4 (low=B4 high=ED)
-  K8 = (FC7D, 6371)   s8 = 10F7 (low=F7 high=10)
-
-============================================================
-Stage 8
-============================================================
-Working on the outer remaining stage K8 / s8.
-  Scanning K8 by matched-context additive differentials.
-[stage-key] 0/12[stage-key] 12/12
-  Top stage-key scorers:
-  #1 (FC7D, 6371) score=2292  <-- true
-      add in=0001 best out=0001 count=548 prob=0.00836182
-      add in=0002 best out=0001 count=553 prob=0.00843811
-      add in=0004 best out=FFFF count=479 prob=0.00730896
-      add in=0008 best out=0001 count=363 prob=0.00553894
-      add in=000F best out=FFFE count=188 prob=0.00286865
-      add in=0010 best out=0003 count=161 prob=0.00245667
-  #2 (7E3E, 6E34) score=1459
-      add in=0001 best out=FFFE count=333 prob=0.00508118
-      add in=0002 best out=FFFF count=328 prob=0.00500488
-      add in=0004 best out=FFFF count=273 prob=0.00416565
-      add in=0008 best out=0001 count=252 prob=0.00384521
-      add in=000F best out=0002 count=140 prob=0.00213623
-      add in=0010 best out=0001 count=133 prob=0.00202942
-  #3 (2BC5, 690E) score=1449
-      add in=0001 best out=0001 count=348 prob=0.00531006
-      add in=0002 best out=FFFE count=314 prob=0.00479126
-      add in=0004 best out=0002 count=293 prob=0.00447083
-      add in=0008 best out=FFFF count=223 prob=0.00340271
-      add in=000F best out=0001 count=134 prob=0.00204468
-      add in=0010 best out=FFFC count=137 prob=0.00209045
-  #4 (F9F8, 3AE0) score=1442
-      add in=0001 best out=0001 count=331 prob=0.00505066
-      add in=0002 best out=0001 count=324 prob=0.00494385
-      add in=0004 best out=0002 count=283 prob=0.00431824
-      add in=0008 best out=FFFF count=235 prob=0.00358582
-      add in=000F best out=FFFF count=133 prob=0.00202942
-      add in=0010 best out=FFFD count=136 prob=0.00207520
-  #5 (0000, 0000) score=1438
-      add in=0001 best out=0002 count=352 prob=0.00537109
-      add in=0002 best out=0002 count=322 prob=0.00491333
-      add in=0004 best out=FFFE count=286 prob=0.00436401
-      add in=0008 best out=FFFD count=219 prob=0.00334167
-      add in=000F best out=FFFF count=136 prob=0.00207520
-      add in=0010 best out=0001 count=123 prob=0.00187683
-
-  Selected K8 = (FC7D, 6371)  [true]
-
-  Peeling K8 to expose the translated reduced cascade.
-  Recovering the low byte of s8 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=F7 total_support=34 rows=(8,8,9,9)  <-- true
-    #2 low=00 total_support=37 rows=(9,9,9,10)
-    #3 low=01 total_support=37 rows=(9,9,9,10)
-    #4 low=02 total_support=37 rows=(9,9,9,10)
-    #5 low=03 total_support=37 rows=(9,9,9,10)
-    #6 low=04 total_support=37 rows=(9,9,9,10)
-    #7 low=05 total_support=37 rows=(9,9,9,10)
-    #8 low=06 total_support=37 rows=(9,9,9,10)
-    #9 low=07 total_support=37 rows=(9,9,9,10)
-    #10 low=F8 total_support=37 rows=(9,9,9,10)
-    #11 low=F9 total_support=37 rows=(9,9,9,10)
-    #12 low=FA total_support=37 rows=(9,9,9,10)
-    #13 low=FB total_support=37 rows=(9,9,9,10)
-    #14 low=FC total_support=37 rows=(9,9,9,10)
-    #15 low=FD total_support=37 rows=(9,9,9,10)
-    #16 low=FE total_support=37 rows=(9,9,9,10)
-
-  Guessing h8 and K7, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 8 -> stage 7:
-    #1 low=F7 high=10 next_key=(8D1E, 9DF5) score=3303  [true state bytes]  [true K7]
-    #2 low=F7 high=0F next_key=(1111, 2222) score=2397
-    #3 low=F7 high=FF next_key=(8D1E, 9DF5) score=2396  [true K7]
-    #4 low=07 high=FF next_key=(D590, 98AC) score=2392
-    #5 low=F7 high=30 next_key=(8D1E, 9DF5) score=2386  [true K7]
-
-  Selected s8 = 10F7  [true]
-  Selected K7 = (8D1E, 9DF5)  [true]
-
-  Reduced cascade after peel: exact table alignment PASS
-============================================================
-Stage 7
-============================================================
-Working on the outer remaining stage K7 / s7.
-  Using K7 from the previous click step: (8D1E, 9DF5)  [true]
-
-  Peeling K7 to expose the translated reduced cascade.
-  Recovering the low byte of s7 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=B4 total_support=22 rows=(5,5,6,6)  <-- true
-    #2 low=B5 total_support=26 rows=(6,6,6,8)
-    #3 low=B3 total_support=27 rows=(6,6,8,7)
-    #4 low=B1 total_support=28 rows=(6,7,8,7)
-    #5 low=B2 total_support=28 rows=(6,7,8,7)
-    #6 low=B6 total_support=28 rows=(7,6,7,8)
-    #7 low=84 total_support=30 rows=(7,7,8,8)
-    #8 low=85 total_support=30 rows=(7,7,8,8)
-    #9 low=86 total_support=30 rows=(7,7,8,8)
-    #10 low=87 total_support=30 rows=(7,7,8,8)
-    #11 low=88 total_support=30 rows=(7,7,8,8)
-    #12 low=89 total_support=30 rows=(7,7,8,8)
-    #13 low=8A total_support=30 rows=(7,7,8,8)
-    #14 low=8B total_support=30 rows=(7,7,8,8)
-    #15 low=8C total_support=30 rows=(7,7,8,8)
-    #16 low=8D total_support=30 rows=(7,7,8,8)
-
-  Guessing h7 and K6, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 7 -> stage 6:
-    #1 low=B4 high=ED next_key=(F44A, 233E) score=5180  [true state bytes]  [true K6]
-    #2 low=B4 high=FF next_key=(1111, 2222) score=3358
-    #3 low=B4 high=CD next_key=(F44A, 233E) score=3339  [true K6]
-    #4 low=84 high=00 next_key=(7CF1, 0371) score=3336
-    #5 low=B4 high=30 next_key=(E8B3, 60C3) score=3333
-
-  Selected s7 = EDB4  [true]
-  Selected K6 = (F44A, 233E)  [true]
-
-  Reduced cascade after peel: exact table alignment PASS
-============================================================
-Stage 6
-============================================================
-Working on the outer remaining stage K6 / s6.
-  Using K6 from the previous click step: (F44A, 233E)  [true]
-
-  Peeling K6 to expose the translated reduced cascade.
-  Recovering the low byte of s6 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=05 total_support=14 rows=(3,3,4,4)  <-- true
-    #2 low=04 total_support=18 rows=(4,3,6,5)
-    #3 low=06 total_support=18 rows=(4,4,5,5)
-    #4 low=07 total_support=18 rows=(4,4,5,5)
-    #5 low=02 total_support=19 rows=(4,4,6,5)
-    #6 low=03 total_support=19 rows=(4,4,6,5)
-    #7 low=08 total_support=20 rows=(4,5,5,6)
-    #8 low=01 total_support=21 rows=(5,5,6,5)
-    #9 low=00 total_support=22 rows=(5,5,6,6)
-    #10 low=09 total_support=22 rows=(5,5,6,6)
-    #11 low=0A total_support=22 rows=(5,5,6,6)
-    #12 low=0B total_support=22 rows=(5,5,6,6)
-    #13 low=0C total_support=22 rows=(5,5,6,6)
-    #14 low=0D total_support=22 rows=(5,5,6,6)
-    #15 low=0E total_support=22 rows=(5,5,6,6)
-    #16 low=0F total_support=22 rows=(5,5,6,6)
-
-  Guessing h6 and K5, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 6 -> stage 5:
-    #1 low=05 high=1D next_key=(50C5, 12DB) score=5920  [true state bytes]  [true K5]
-    #2 low=05 high=3D next_key=(50C5, 12DB) score=5320  [true K5]
-    #3 low=05 high=30 next_key=(FF06, 7863) score=5290
-    #4 low=05 high=1E next_key=(BEEF, 1234) score=5274
-    #5 low=05 high=1C next_key=(0000, 0000) score=5270
-
-  Selected s6 = 1D05  [true]
-  Selected K5 = (50C5, 12DB)  [true]
-
-  Reduced cascade after peel: exact table alignment PASS
-============================================================
-Stage 5
-============================================================
-Working on the outer remaining stage K5 / s5.
-  Using K5 from the previous click step: (50C5, 12DB)  [true]
-
-  Peeling K5 to expose the translated reduced cascade.
-  Recovering the low byte of s5 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=F1 total_support=12 rows=(3,3,3,3)  <-- true
-    #2 low=F2 total_support=12 rows=(3,3,3,3)
-    #3 low=F3 total_support=12 rows=(3,3,3,3)
-    #4 low=F4 total_support=12 rows=(3,3,3,3)
-    #5 low=F5 total_support=12 rows=(3,3,3,3)
-    #6 low=F6 total_support=12 rows=(3,3,3,3)
-    #7 low=F7 total_support=12 rows=(3,3,3,3)
-    #8 low=F8 total_support=12 rows=(3,3,3,3)
-    #9 low=F9 total_support=13 rows=(3,3,4,3)
-    #10 low=FA total_support=13 rows=(3,3,4,3)
-    #11 low=00 total_support=14 rows=(3,3,4,4)
-    #12 low=01 total_support=14 rows=(3,3,4,4)
-    #13 low=FB total_support=14 rows=(3,3,4,4)
-    #14 low=FC total_support=14 rows=(3,3,4,4)
-    #15 low=FD total_support=14 rows=(3,3,4,4)
-    #16 low=FE total_support=14 rows=(3,3,4,4)
-
-  Guessing h5 and K4, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 5 -> stage 4:
-    #1 low=F1 high=F6 next_key=(E953, 07FD) score=6545  [true state bytes]  [true K4]
-    #2 low=F1 high=30 next_key=(E953, 07FD) score=5982  [true K4]
-    #3 low=F1 high=F7 next_key=(E953, 07FD) score=5961  [true K4]
-    #4 low=01 high=F7 next_key=(1D6E, 24C2) score=5948
-    #5 low=F1 high=D6 next_key=(E953, 07FC) score=5941
-
-  Selected s5 = F6F1  [true]
-  Selected K4 = (E953, 07FD)  [true]
-
-  Reduced cascade after peel: exact table alignment PASS
-============================================================
-Stage 4
-============================================================
-Working on the outer remaining stage K4 / s4.
-  Using K4 from the previous click step: (E953, 07FD)  [true]
-
-  Peeling K4 to expose the translated reduced cascade.
-  Recovering the low byte of s4 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=11 total_support=8 rows=(2,2,2,2)  <-- true
-    #2 low=10 total_support=10 rows=(3,3,2,2)
-    #3 low=0E total_support=11 rows=(3,3,3,2)
-    #4 low=0F total_support=11 rows=(3,3,3,2)
-    #5 low=00 total_support=12 rows=(3,3,3,3)
-    #6 low=01 total_support=12 rows=(3,3,3,3)
-    #7 low=02 total_support=12 rows=(3,3,3,3)
-    #8 low=03 total_support=12 rows=(3,3,3,3)
-    #9 low=04 total_support=12 rows=(3,3,3,3)
-    #10 low=05 total_support=12 rows=(3,3,3,3)
-    #11 low=06 total_support=12 rows=(3,3,3,3)
-    #12 low=07 total_support=12 rows=(3,3,3,3)
-    #13 low=08 total_support=12 rows=(3,3,3,3)
-    #14 low=09 total_support=12 rows=(3,3,3,3)
-    #15 low=0A total_support=12 rows=(3,3,3,3)
-    #16 low=0B total_support=12 rows=(3,3,3,3)
-
-  Guessing h4 and K3, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 4 -> stage 3:
-    #1 low=11 high=89 next_key=(02DD, 3972) score=13253  [true state bytes]  [true K3]
-    #2 low=01 high=FF next_key=(1015, 482E) score=6743
-    #3 low=11 high=30 next_key=(31BD, F3FE) score=6714
-    #4 low=01 high=88 next_key=(BED6, C199) score=6712
-    #5 low=01 high=8A next_key=(4CDA, A435) score=6675
-
-  Selected s4 = 8911  [true]
-  Selected K3 = (02DD, 3972)  [true]
-
-  Reduced cascade after peel: exact table alignment PASS
-============================================================
-Stage 3
-============================================================
-Working on the outer remaining stage K3 / s3.
-  Using K3 from the previous click step: (02DD, 3972)  [true]
-
-  Peeling K3 to expose the translated reduced cascade.
-  Recovering the low byte of s3 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=00 total_support=8 rows=(2,2,2,2)
-    #2 low=01 total_support=8 rows=(2,2,2,2)
-    #3 low=02 total_support=8 rows=(2,2,2,2)
-    #4 low=03 total_support=8 rows=(2,2,2,2)
-    #5 low=04 total_support=8 rows=(2,2,2,2)
-    #6 low=05 total_support=8 rows=(2,2,2,2)
-    #7 low=06 total_support=8 rows=(2,2,2,2)
-    #8 low=07 total_support=8 rows=(2,2,2,2)
-    #9 low=08 total_support=8 rows=(2,2,2,2)  <-- true
-    #10 low=F8 total_support=8 rows=(2,2,2,2)
-    #11 low=F9 total_support=8 rows=(2,2,2,2)
-    #12 low=FA total_support=8 rows=(2,2,2,2)
-    #13 low=FB total_support=8 rows=(2,2,2,2)
-    #14 low=FC total_support=8 rows=(2,2,2,2)
-    #15 low=FD total_support=8 rows=(2,2,2,2)
-    #16 low=FE total_support=8 rows=(2,2,2,2)
-
-  Guessing h3 and K2, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 3 -> stage 2:
-    #1 low=F8 high=30 next_key=(9283, ECE3) score=13668
-    #2 low=08 high=43 next_key=(5493, 2298) score=13628
-    #3 low=F8 high=40 next_key=(74AF, B08B) score=13555
-    #4 low=08 high=40 next_key=(DA5D, 96D6) score=13553
-    #5 low=08 high=00 next_key=(31E9, 67FA) score=13527
-
-  Selected s3 = 30F8  [mismatch vs true 4208]
-  Selected K2 = (9283, ECE3)  [mismatch vs true (DA5D, 96D7)]
-
-  Reduced cascade after peel: exact table alignment FAIL at x=0000 recovered=78BC true=67AC
-============================================================
-Stage 2
-============================================================
-Working on the outer remaining stage K2 / s2.
-  Using K2 from the previous click step: (9283, ECE3)  [mismatch vs true (DA5D, 96D7)]
-
-  Peeling K2 to expose the translated reduced cascade.
-  Recovering the low byte of s2 using the carry/support primitive.
-  Top low-byte candidates by carry/support score:
-    #1 low=00 total_support=8 rows=(2,2,2,2)  <-- true
-    #2 low=01 total_support=8 rows=(2,2,2,2)
-    #3 low=02 total_support=8 rows=(2,2,2,2)
-    #4 low=03 total_support=8 rows=(2,2,2,2)
-    #5 low=04 total_support=8 rows=(2,2,2,2)
-    #6 low=05 total_support=8 rows=(2,2,2,2)
-    #7 low=06 total_support=8 rows=(2,2,2,2)
-    #8 low=07 total_support=8 rows=(2,2,2,2)
-    #9 low=08 total_support=8 rows=(2,2,2,2)
-    #10 low=09 total_support=8 rows=(2,2,2,2)
-    #11 low=0A total_support=8 rows=(2,2,2,2)
-    #12 low=0B total_support=8 rows=(2,2,2,2)
-    #13 low=0C total_support=8 rows=(2,2,2,2)
-    #14 low=0D total_support=8 rows=(2,2,2,2)
-    #15 low=0E total_support=8 rows=(2,2,2,2)
-    #16 low=0F total_support=8 rows=(2,2,2,2)
-
-  Guessing h2 and K1, then looking for the next differential peel to click.
-  [click combos] 1/128  [click combos] 2/128  [click combos] 3/128  [click combos] 4/128  [click combos] 5/128  [click combos] 6/128  [click combos] 7/128  [click combos] 8/128  [click combos] 9/128  [click combos] 10/128  [click combos] 11/128  [click combos] 12/128  [click combos] 13/128  [click combos] 14/128  [click combos] 15/128  [click combos] 16/128  [click combos] 17/128  [click combos] 18/128  [click combos] 19/128  [click combos] 20/128  [click combos] 21/128  [click combos] 22/128  [click combos] 23/128  [click combos] 24/128  [click combos] 25/128  [click combos] 26/128  [click combos] 27/128  [click combos] 28/128  [click combos] 29/128  [click combos] 30/128  [click combos] 31/128  [click combos] 32/128  [click combos] 33/128  [click combos] 34/128  [click combos] 35/128  [click combos] 36/128  [click combos] 37/128  [click combos] 38/128  [click combos] 39/128  [click combos] 40/128  [click combos] 41/128  [click combos] 42/128  [click combos] 43/128  [click combos] 44/128  [click combos] 45/128  [click combos] 46/128  [click combos] 47/128  [click combos] 48/128  [click combos] 49/128  [click combos] 50/128  [click combos] 51/128  [click combos] 52/128  [click combos] 53/128  [click combos] 54/128  [click combos] 55/128  [click combos] 56/128  [click combos] 57/128  [click combos] 58/128  [click combos] 59/128  [click combos] 60/128  [click combos] 61/128  [click combos] 62/128  [click combos] 63/128  [click combos] 64/128  [click combos] 65/128  [click combos] 66/128  [click combos] 67/128  [click combos] 68/128  [click combos] 69/128  [click combos] 70/128  [click combos] 71/128  [click combos] 72/128  [click combos] 73/128  [click combos] 74/128  [click combos] 75/128  [click combos] 76/128  [click combos] 77/128  [click combos] 78/128  [click combos] 79/128  [click combos] 80/128  [click combos] 81/128  [click combos] 82/128  [click combos] 83/128  [click combos] 84/128  [click combos] 85/128  [click combos] 86/128  [click combos] 87/128  [click combos] 88/128  [click combos] 89/128  [click combos] 90/128  [click combos] 91/128  [click combos] 92/128  [click combos] 93/128  [click combos] 94/128  [click combos] 95/128  [click combos] 96/128  [click combos] 97/128  [click combos] 98/128  [click combos] 99/128  [click combos] 100/128  [click combos] 101/128  [click combos] 102/128  [click combos] 103/128  [click combos] 104/128  [click combos] 105/128  [click combos] 106/128  [click combos] 107/128  [click combos] 108/128  [click combos] 109/128  [click combos] 110/128  [click combos] 111/128  [click combos] 112/128  [click combos] 113/128  [click combos] 114/128  [click combos] 115/128  [click combos] 116/128  [click combos] 117/128  [click combos] 118/128  [click combos] 119/128  [click combos] 120/128  [click combos] 121/128  [click combos] 122/128  [click combos] 123/128  [click combos] 124/128  [click combos] 125/128  [click combos] 126/128  [click combos] 127/128  [click combos] 128/128  [click combos] 128/128
-
-  Top click restorations for stage 2 -> stage 1:
-    #1 low=00 high=FF next_key=(1111, 2222) score=13607
-    #2 low=00 high=2A next_key=(E4BE, 6763) score=13564
-    #3 low=00 high=0A next_key=(E4BE, 6763) score=13522  [true state bytes]
-    #4 low=00 high=30 next_key=(7881, 1B17) score=13484
-    #5 low=00 high=00 next_key=(09F4, CD09) score=13447
-
-  Selected s2 = FF00  [mismatch vs true 0A00]
-  Selected K1 = (1111, 2222)  [mismatch vs true (E8B9, B733)]
-
-  Reduced cascade after peel: exact table alignment FAIL at x=0000 recovered=BF6F true=4F4D
-============================================================
-Stage 1
-============================================================
-Working on the outer remaining stage K1 / s1.
-  Using K1 from the previous click step: (1111, 2222)  [mismatch vs true (E8B9, B733)]
-
-  Peeling K1 to expose the translated reduced cascade.
-  Recovering s1 directly from constancy of DEC_Block_1(F1(x)) - x.
-  Recovered s1 = B084  [mismatch vs true 1F4E]
-  Constancy check: FAIL
-
-  Final F0 (identity): exact table alignment FAIL at x=0000 recovered=B084 true=0000
-
-Recovered values summary:
-  K1 = (1111, 2222)   true=(E8B9, B733)  [mismatch]
-  s1 = B084   true=1F4E  [mismatch]
-  K2 = (9283, ECE3)   true=(DA5D, 96D7)  [mismatch]
-  s2 = FF00   true=0A00  [mismatch]
-  K3 = (02DD, 3972)   true=(02DD, 3972)  [OK]
-  s3 = 30F8   true=4208  [mismatch]
-  K4 = (E953, 07FD)   true=(E953, 07FD)  [OK]
-  s4 = 8911   true=8911  [OK]
-  K5 = (50C5, 12DB)   true=(50C5, 12DB)  [OK]
-  s5 = F6F1   true=F6F1  [OK]
-  K6 = (F44A, 233E)   true=(F44A, 233E)  [OK]
-  s6 = 1D05   true=1D05  [OK]
-  K7 = (8D1E, 9DF5)   true=(8D1E, 9DF5)  [OK]
-  s7 = EDB4   true=EDB4  [OK]
-  K8 = (FC7D, 6371)   true=(FC7D, 6371)  [OK]
-  s8 = 10F7   true=10F7  [OK]
-
