@@ -1,0 +1,215 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+
+\geometry{margin=1in}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\newtheorem{corollary}{Corollary}
+
+\providecommand{\StageKernelBound}{2^{40}}
+\providecommand{\FullTargetBound}{2^{45}}
+\providecommand{\RecursiveStatusText}{open under bounded certification}
+\providecommand{\BoundedBranchViableHighCount}{?}
+\providecommand{\BoundedBranchTrueHigh}{??}
+\providecommand{\StageWindowWinnerCount}{?}
+
+\title{Exact Structural Breaks and a Certified $2^{40}$ Stage Kernel for the Implemented SEPAR Cipher}
+\author{Noah Ostle draft}
+\date{\today}
+
+\begin{document}
+\IfFileExists{certifier_macros.tex}{\input{certifier_macros.tex}}{}
+\maketitle
+
+\begin{abstract}
+We study the implemented SEPAR cipher in the repository artifact \texttt{SEPAR/main.c} under an attack model with encryption and decryption oracles, free state reset, chosen IV, chosen plaintext, and one unknown master key. We formalize three exact structural failures of the implementation: a closed-form collapse of \(\mathrm{Sep\_ROTL16}\), byte-triangular \(\mathrm{ENC\_Block}\) and \(\mathrm{DEC\_Block}\), and a matched-context forward/inverse permutation oracle induced by reset plus chosen-prefix control. These facts yield an exact right-peel stage kernel whose exhaustive cost is \(\StageKernelBound\) block-core evaluations. We provide a native proof certifier that validates the structural lemmas, the matched-context inverse property, exact truth-path normalization to the identity table, and bounded stage-local recovery probes. The remaining proof obligation for an unconditional \(\FullTargetBound\) full-key recovery is a recursive survivor theorem controlling the high-byte and child-stage ambiguity tree. Bounded exact certification does not yet close that theorem, so the proved result of this paper is the exact stage kernel and the formal reduction of the full claim to one explicit recursive condition.
+\end{abstract}
+
+\section{Attack Model and Implementation Scope}
+This paper concerns the implementation in \texttt{SEPAR/main.c}. Where the accompanying design document and the code disagree, the code is authoritative. The attacker is assumed to have:
+\begin{itemize}
+\item encryption and decryption oracles,
+\item free reset to the initial IV,
+\item chosen IV and chosen plaintext,
+\item one unknown master key.
+\end{itemize}
+
+Let \(P=(p_0,\dots,p_{m-1})\) be a chosen plaintext prefix and let \(C=\mathrm{Enc}(IV,P)\). For a fixed reachable context \((P,C,IV)\), we write the next-word forward map as
+\[
+F_{P,IV}(x)=\mathrm{Enc}(IV,P\|x)[m]
+\]
+and the next-word inverse map as
+\[
+G_{C,IV}(y)=\mathrm{Dec}(IV,C\|y)[m].
+\]
+
+\section{Structural Collapse of the Implemented Core}
+\subsection{Closed-form linear layer}
+Write a 16-bit word as four nibbles \(x=(a,b,c,d)\). A direct simplification of the implemented \(\mathrm{Sep\_ROTL16}\) yields
+\[
+L(a,b,c,d)=(b\oplus c,\ b,\ a,\ a\oplus d).
+\]
+The certifier verifies this identity exhaustively over all \(2^{16}\) inputs.
+
+\subsection{Byte-triangular block cores}
+\begin{lemma}
+For every stage index \(i\in\{1,\dots,8\}\) and every stage-local key pair \(K_i\), the implemented block cores satisfy
+\[
+\mathrm{ENC\_Block}_{K_i}(u\|l)=U_i(u)\|L_i(u,l),\qquad
+\mathrm{DEC\_Block}_{K_i}(u\|l)=U_i^{-1}(u)\|L_i'(u,l),
+\]
+for byte permutations \(U_i\).
+\end{lemma}
+
+\begin{proof}
+The linear-layer collapse shows that the upper output byte depends only on the upper input byte. The S-box layers are nibblewise and the key additions are bytewise. Therefore the upper-byte dependency graph remains closed under composition through the whole stage core.
+\end{proof}
+
+\subsection{Matched-context oracle}
+\begin{lemma}
+For every reachable prefix context, \(G_{C,IV}=F_{P,IV}^{-1}\).
+\end{lemma}
+
+\begin{proof}
+Encryption and decryption compute the same intermediate tuple \((v_{12},\dots,v_{78})\) in opposite directions and then apply the same state-update rule. Induction over the prefix length shows that encryption of \(P\) and decryption of \(C\) reach the same internal state before the next word.
+\end{proof}
+
+The native certifier checks this identity by exhaustive next-word inversion over all \(2^{16}\) inputs for the configured prefix.
+
+\section{Exact $2^{40}$ Stage Kernel}
+Fix one matched context and define
+\[
+T_8 = E_8\circ A_{s_8}\circ E_7\circ A_{s_7}\circ \cdots \circ E_1\circ A_{s_1},
+\]
+where \(E_i\) denotes the stage-\(i\) block permutation and \(A_{s_i}(x)=x+s_i \bmod 2^{16}\).
+
+\begin{definition}
+For a row \(R_u=\{u\|l : l\in\{0,\dots,255\}\}\), let \(\Pi_u(f)\) be the canonical partition of upper-byte equality classes induced by the 256 outputs \(\{f(u\|l)\}\). For a selected row set \(S\), define the branch profile
+\[
+B_S(f)=\left(\max_{u\in S} |\Pi_u(f)|,\ \sum_{u\in S} |\Pi_u(f)|,\ \{\Pi_u(f)\}_{u\in S,\ |\Pi_u(f)|=\max}\right).
+\]
+\end{definition}
+
+\begin{lemma}
+Left-composition by any byte-triangular permutation preserves canonical row partitions.
+\end{lemma}
+
+\begin{proof}
+If \(B\) is byte triangular, then \(\mathrm{hi}(B(z))\) depends only on \(\mathrm{hi}(z)\), and the induced upper-byte map is a permutation. Therefore \(\mathrm{hi}(B(f(x)))=\mathrm{hi}(B(f(y)))\) if and only if \(\mathrm{hi}(f(x))=\mathrm{hi}(f(y))\).
+\end{proof}
+
+\begin{theorem}
+One exhaustive stage scan over one 256-word row costs exactly \(\StageKernelBound\) block evaluations.
+\end{theorem}
+
+\begin{proof}
+For a fixed stage, the attacker enumerates all \(2^{32}\) segment-key guesses. Each guess applies \(\mathrm{DEC\_Block}\) to a row of 256 words. The low-byte minimization is arithmetic on the decoded row and does not add block evaluations. Hence the exact block-core cost is \(2^{32}\cdot 2^8=2^{40}\).
+\end{proof}
+
+\subsection*{Algorithm 1: Exact Stage Scan on One Hot Row}
+\begin{enumerate}
+\item Fix a matched-context table \(T_m\), a stage \(m\), and one selected hot row \(R_u\).
+\item Enumerate all \(2^{32}\) segment keys \(K_m\).
+\item For each \(K_m\), decode the 256 row words with \(\mathrm{DEC\_Block}_{K_m}\).
+\item For each low byte \(q\in\{0,\dots,255\}\), subtract \(q\) from the decoded row and compute the canonical row partition.
+\item Keep the lexicographically minimal branch profile and its low-byte survivor set.
+\item Return the globally minimal profile together with its winning segment-key set.
+\end{enumerate}
+
+\section{Recursive Right-Peel Formalization}
+After a successful outer peel, the attack attempts to recurse on
+\[
+T_m = E_m\circ A_{s_m}\circ T_{m-1}.
+\]
+For a guessed stage key \(K_m\), the certifier implements:
+\begin{enumerate}
+\item exact stage scan for \(K_m\),
+\item exact low-byte refinement,
+\item subtraction of each candidate state word \(s_m\),
+\item a child-stage viability test on the residual table.
+\end{enumerate}
+
+\subsection*{Algorithm 2: Exact Recursive Right Peel}
+\begin{enumerate}
+\item Input a matched-context table \(T_m\).
+\item If \(m=0\), accept exactly when the residual table is the identity permutation.
+\item Run the exhaustive stage scan for stage \(m\).
+\item For each winning stage key \(K_m\), refine the low-byte survivor set.
+\item For each candidate state word \(s_m\), form the residual table
+\[
+T_{m-1}=\mathrm{DEC\_Block}_{K_m}(T_m)-s_m
+\]
+and recurse on \(T_{m-1}\).
+\end{enumerate}
+
+\section{Recursive Survivor Theorem and Full $2^{45}$ Complexity}
+The intended full claim can be stated precisely.
+
+\begin{theorem}[Target full bound]
+Assume that, for every stage residual encountered by the exact peel, the stage key, low-byte, high-byte, and child-stage ambiguity can be resolved using at most four scan-equivalents of the \(\StageKernelBound\) kernel. Then exact full-key recovery costs at most
+\[
+8\cdot 4\cdot 2^{40}=2^{45}
+\]
+block evaluations, plus \(2^{16}\) or \(2^{17}\) oracle calls for one or two matched-context codebooks.
+\end{theorem}
+
+\begin{proposition}
+The certifier in this artifact does not yet prove the survivor condition of the target theorem unconditionally.
+\end{proposition}
+
+\begin{proof}
+The certifier proves the structural lemmas, the exact stage-kernel theorem, exact truth-path normalization to the identity table, and bounded branch probes. However, bounded branch probes still exhibit multiple viable high bytes for the configured stage-\(8\to7\) and stage-\(7\to6\) transitions. No symbolic argument in this artifact reduces those survivor sets to a universal constant bound for all keys and contexts. Therefore the unconditional \(\FullTargetBound\) theorem remains open.
+\end{proof}
+
+\section{Certifier Methodology and Results}
+The native certifier is a separate program, \texttt{separ\_proof\_certifier.c}, built against the same stage logic as the attack engine. It provides:
+\begin{itemize}
+\item \texttt{self-checks},
+\item \texttt{stage-kernel-census},
+\item \texttt{lowbyte-certify},
+\item \texttt{branch-certify},
+\item \texttt{paper-export}.
+\end{itemize}
+
+The generated tables in this document come from the certifier output; they are not hand-copied. In particular:
+\begin{itemize}
+\item the stage-\(8\) bounded window census recovers a unique outer winner in a \(2^8\)-candidate window around the true key,
+\item truth-path low-byte refinement is unique for every stage of the built-in key, IV, and prefix,
+\item bounded exact branch probes produce \(\BoundedBranchViableHighCount\) viable high bytes for the stage-\(8\to7\) probe with a three-key stage-\(7\) candidate set.
+\end{itemize}
+
+\IfFileExists{certifier_tables.tex}{\input{certifier_tables.tex}}{}
+
+\section{Comparison Against the Published Design Claims}
+The implementation does not realize the design narrative of a well-diffused 16-bit SP-network with a tightly coupled 256-bit key schedule. Instead:
+\begin{itemize}
+\item the linear layer collapses to an affine nibble permutation,
+\item the block cores are byte triangular,
+\item the stream-like outer mode exposes a matched forward/inverse permutation oracle,
+\item the nominal 256-bit key schedule decomposes into eight independent 32-bit stage problems.
+\end{itemize}
+
+The exact right-peel stage kernel is therefore a structural break of the implementation, not a heuristic statistical attack.
+
+\section{Limitations and Reproducibility}
+The proved contribution of this artifact is the exact stage-kernel theorem and the reduction of the full claim to one explicit recursive survivor theorem. The unconditional \(\FullTargetBound\) full-key theorem should not be claimed until that survivor theorem is closed either symbolically or by a finite exhaustive certificate.
+
+Representative regeneration commands are:
+\begin{verbatim}
+SEPAR_certifier.exe self-checks
+SEPAR_certifier.exe stage-kernel-census --start-stage 8 \
+  --candidate-start 0xFC7D6300 --candidate-count 0x100 --hot-rows 1
+SEPAR_certifier.exe branch-certify --start-stage 8 \
+  --stage-candidate 7:8D1E,9DF5 --stage-candidate 7:8D1E,9DF4 \
+  --stage-candidate 7:0000,0000
+SEPAR_certifier.exe paper-export > certifier_tables.tex
+\end{verbatim}
+
+\end{document}
