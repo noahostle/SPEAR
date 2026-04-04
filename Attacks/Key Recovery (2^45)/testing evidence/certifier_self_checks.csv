@@ -1,6 +1,0 @@
-check,pass
-sep_rotl16_collapse,1
-byte_triangularity,1
-matched_context_inverse,1
-truth_path_normalization,1
-second_context_filter,1

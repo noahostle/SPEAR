@@ -1,11 +1,19 @@
 import argparse
 import ctypes
 import random
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-DLL_PATH = ROOT / "SEPAR" / "SEPAR.dll"
+COMMON_DIR = ROOT.parent / "per_block_diff"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from separ_analysis_common import resolve_separ_dll_path  # noqa: E402
+
+
+DLL_PATH = resolve_separ_dll_path(__file__)
 
 
 def _u16_array(values):
