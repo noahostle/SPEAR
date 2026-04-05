@@ -400,7 +400,7 @@ So yes: the recursion is symmetric.
 ## 11. What is already practical
 
 The following parts are fully implemented and validated in
-[`Attacks/full_key_recovery/hb1_style_stage_peel.py`](C:/Users/noaho/Desktop/spear/Attacks/full_key_recovery/hb1_style_stage_peel.py):
+[`Attacks/full_key_recovery/testing/hb1_style_stage_peel.py`](C:/Users/noaho/Desktop/spear/Attacks/full_key_recovery/testing/hb1_style_stage_peel.py):
 
 - chosen-IV weak-context search
 - chosen-IV weak-context search on the inverse side
@@ -412,10 +412,52 @@ The following parts are fully implemented and validated in
 - middle-permutation construction utilities for recursive exploration
 - reduced-cascade `K7` / `K6` demo modes
 - the companion scanner
-  [`scan_stage_visibility.py`](C:/Users/noaho/Desktop/spear/Attacks/full_key_recovery/scan_stage_visibility.py)
+  [`scan_stage_visibility.py`](C:/Users/noaho/Desktop/spear/Attacks/full_key_recovery/testing/scan_stage_visibility.py)
   for exact or sampled visibility scans after arbitrary exact left/right peels
 
-## 12. What is still annoying
+## 12. Lane-Class Bound Experiment
+
+The main standalone demo
+[`diff_peel_demo.py`](C:/Users/noaho/Desktop/spear/Attacks/full_key_recovery/diff_peel_demo.py)
+now contains a `lane-bound` mode for testing the realistic offline bound.
+
+The idea is:
+
+- the autonomous second nibble exposes a 16-bit abstract lane key
+- that collapses each 32-bit stage key to a true same-lane class of about `2^16` full key pairs
+- we then rescore only that class on the peeled visible stage
+
+For the built-in key, the actual same-lane class sizes are:
+
+- `K1`: `73728`
+- `K2`: `73728`
+- `K3`: `73728`
+- `K4`: `16384`
+- `K5`: `110592`
+- `K6`: `73728`
+- `K7`: `73728`
+- `K8`: `110592`
+
+Empirically:
+
+- on the deep reduced context exposing `K4`, the script exhaustively scanned the entire same-lane class of `16384` candidates and the true `K4` ranked first even under the cheap sampled score
+- the cheap prefilter is now a simple tuple:
+  `(
+    upper-byte additive-diff concentration for deltas 1..15,
+    top-nibble additive-diff concentration for deltas 1..15,
+    old full-word sampled additive score
+  )`
+- this directly uses the exact algebra:
+  the nibble channel fixes a `~2^16` lane class, then block triangularity makes the upper-byte additive differences much more concentrated for the correct peeled key
+- on sampled `512` candidate subsets of the correct same-lane class, this prefilter ranked the true key first for `K1`, `K2`, `K5`, `K6`, and `K8`
+- `K7` and `K3` were already clean under the cheaper score, and remain rank `1`
+
+So the claimed realistic bound is at least structurally implementable:
+
+- lane fingerprint collapses `2^32` to about `2^16`
+- exact or near-exact rescoring of only that class continues to work after recursive peels
+
+## 13. What is still annoying
 
 The remaining automation problem is not the existence of the recursion. It is the gauge bookkeeping:
 
@@ -430,7 +472,7 @@ At this point the implementation is already clearly broken in the Hummingbird se
 - the state machine exposes reproducible chosen-state 16-bit permutations
 - the reduced middle machine remains weak after peeling
 
-## 13. Sumarry
+## 14. Sumarry
 
 The implementation bug in `Sep_ROTL16()` is the devastating error.
 
