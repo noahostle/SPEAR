@@ -1,0 +1,544 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{verbatim}
+
+\title{A Public End-to-End Full-Key Recovery Attack on the \texttt{main.c} Implementation of SEPAR}
+\author{}
+\date{2026-04-14}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study the \emph{implementation} of SEPAR in \texttt{SEPAR/main.c}, not the cipher as described in the published design paper. In the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model, we present a public end-to-end full-key recovery attack against the 256-bit implementation key. The attack has two phases. First, a public outer bootstrap recovers the right suffix keys $K_8,K_7,K_6,K_5$ by a hybrid quotient/differential procedure. Second, a one-context exact recursive scan continues the same stage-local recovery inward through $K_4,K_3,K_2$, and an exact stage-local closure recovers $K_1$ from the stage-2 reduced table. The acceptance condition is exact: a recovered full 256-bit candidate key is accepted only if it reproduces the full one-word oracle codebook on the successful IV. There is no injected hidden-state information and no truth-based filtering in the public search path. We give exact algebra for the recursive reduction, describe the complete attack implemented in \texttt{separ\_public\_full\_hybrid\_attack.c}, report a random-key full recovery, and provide a Monte Carlo estimate of the inward IV-search success probability.
+\end{abstract}
+
+\section{Introduction}
+The implementation in \texttt{SEPAR/main.c} is an eight-stage 16-bit cascade with 256-bit master key, 128-bit IV, and an 8-word state. The original paper claims resistance against standard differential and linear cryptanalysis. That claim is irrelevant to the actual implementation we attack here. The target in this note is the concrete word-oriented code in \texttt{main.c}, together with the public chosen-IV reset interface exposed by the code base.
+
+The attack model is the same one used throughout the surrounding analysis:
+\begin{itemize}[leftmargin=1.5em]
+\item chosen IV;
+\item chosen plaintext and chosen ciphertext;
+\item exact state reset between oracle calls.
+\end{itemize}
+
+Under that model each IV determines a public 16-bit permutation codebook on one-word queries. The central question is whether the public right-recursive machinery already used on the outer suffix can be pushed all the way to full key recovery. The answer is yes, with one qualification: the search for a suitable IV is Monte Carlo. Once a suitable IV is found, the key recovery and the final acceptance test are exact and deterministic.
+
+\paragraph{Main result.}
+Let $F_{\mathrm{IV}}$ denote the public one-word encryption permutation under reset IV. For the tested random key
+\[
+K=
+\texttt{2DE13EF0284A5C9BEB9FA9664ED8258BBDE5A7EA23C03CE6F3DD038E0E7570B5},
+\]
+the public attack implemented in
+\[
+\texttt{C:\textbackslash Users\textbackslash noaho\textbackslash Desktop\textbackslash upload\textbackslash separ\_public\_full\_hybrid\_attack.c}
+\]
+recovers the full 256-bit key by:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item a 512-trial weak-IV beam search and public stage-8 hybrid bootstrap for $K_8$;
+\item a successful inward IV
+\[
+\texttt{D17A5783A9F94E08F948B6EB536519A4};
+\]
+\item exact recursive recovery of $(K_7,s_8),(K_6,s_7),(K_5,s_6),(K_4,s_5),(K_3,s_4),(K_2,s_3)$;
+\item exact recovery of $(K_1,s_2,s_1)$ from the public stage-2 reduced table;
+\item exact verification that the recovered full key reproduces the entire one-word oracle table on the successful IV.
+\end{enumerate}
+
+The validated public log is:
+\begin{center}
+\href{file:///C:/Users/noaho/Desktop/upload/separ_public_full_hybrid_attack_randomkey_public_debug.log}{\texttt{separ\_public\_full\_hybrid\_attack\_randomkey\_public\_debug.log}}
+\end{center}
+
+\section{The implementation model}
+\subsection{Stage functions}
+Let $E_i:\mathbb{Z}_{2^{16}}\to\mathbb{Z}_{2^{16}}$ be the stage-local \texttt{ENC\_Block} permutation for stage $i\in\{1,\dots,8\}$, keyed by the 32-bit segment key pair
+\[
+K_i=(k_{2i-2},k_{2i-1}).
+\]
+Let $D_i=E_i^{-1}$ be the stage-local inverse induced by \texttt{DEC\_Block}. For a state word $s_i\in\mathbb{Z}_{2^{16}}$, define the translated stage permutation
+\[
+B_i^{(s_i)}(x)=E_i(x+s_i),
+\qquad
+\left(B_i^{(s_i)}\right)^{-1}(y)=D_i(y)-s_i.
+\]
+
+For one-word encryption under a fixed reset IV, the public permutation is
+\[
+F_{\mathrm{IV}}
+=
+B_8^{(s_8)}
+\circ
+B_7^{(s_7)}
+\circ \cdots \circ
+B_1^{(s_1)}.
+\]
+
+\subsection{State update law}
+Write the eight state words as $(s_1,\dots,s_8)$ and the stage outputs as
+\[
+v_{12},v_{23},v_{34},v_{45},v_{56},v_{67},v_{78},c.
+\]
+From \texttt{Separ\_Encryption} in \texttt{main.c}, the exact state update after one word is
+\begin{align}
+s_2' &= s_2 + v_{12} + v_{56} + s_6, \label{eq:s2}\\
+s_3' &= s_3 + v_{23} + v_{34} + s_4 + s_1, \label{eq:s3}\\
+s_4' &= s_4 + v_{12} + v_{45} + s_8, \label{eq:s4}\\
+s_5' &= s_5 + v_{23} + L', \label{eq:s5}\\
+s_6' &= s_6 + v_{12} + v_{45} + s_7, \label{eq:s6}\\
+s_7' &= s_7 + v_{23} + v_{67}, \label{eq:s7}\\
+s_8' &= s_8 + v_{45}, \label{eq:s8}\\
+s_1' &= s_1 + s_5 + v_{34} + 2v_{23} + v_{78}, \label{eq:s1}
+\end{align}
+where $L'$ is the stepped LFSR value.
+
+The attack in this paper uses only one-word reset codebooks, so the update law matters in two places:
+\begin{enumerate}[label=(\alph*),leftmargin=1.5em]
+\item it explains which state word is exposed at each recursive step;
+\item it explains why stage~1 is not another projected-family recursion, but is still exactly recoverable from the stage-2 reduced table.
+\end{enumerate}
+
+\subsection{Oracle model}
+Under chosen IV and reset, each IV defines exact public codebooks
+\[
+F_{\mathrm{IV}}(x)=\text{Enc}_{K,\mathrm{IV}}(x),
+\qquad
+G_{\mathrm{IV}}(y)=\text{Dec}_{K,\mathrm{IV}}(y)=F_{\mathrm{IV}}^{-1}(y),
+\]
+obtained by querying all $2^{16}$ one-word plaintexts or ciphertexts. Because the block size is only 16 bits, exact full-table verification is practical and is used as the final public acceptance test.
+
+\section{Exact reduced tables}
+\subsection{Suffix peeling}
+Assume that $K_8,\dots,K_{m+1}$ and the corresponding outer state words $s_8,\dots,s_{m+2}$ have already been recovered for a fixed IV. Then the public codebook can be peeled exactly down to stage $m+1$.
+
+\begin{definition}[Stage-$m$ reduced current table]
+For $m\in\{2,\dots,7\}$ define
+\[
+R_m
+=
+B_m^{(s_m)}\circ \cdots \circ B_1^{(s_1)},
+\]
+and
+\[
+T_m
+=
+B_{m+1}^{(s_{m+1})}\circ R_m.
+\]
+After peeling the known outer suffix from $F_{\mathrm{IV}}$, the table $T_m$ is fully public.
+\end{definition}
+
+\begin{lemma}[Exact translation form]
+For every $m\in\{2,\dots,7\}$,
+\[
+D_{m+1}\!\left(T_m(x)\right)=R_m(x)+s_{m+1}.
+\]
+\end{lemma}
+
+\begin{proof}
+By definition,
+\[
+T_m(x)=E_{m+1}(R_m(x)+s_{m+1}).
+\]
+Applying $D_{m+1}$ yields the claim.
+\end{proof}
+
+Thus the public stage-$m$ object is the inner cascade $R_m$ observed through an \emph{output translation} by the unknown state word $s_{m+1}$.
+
+\subsection{Exact low-byte score}
+For a candidate low byte $b\in\mathbb{Z}_{256}$, define the row support
+\[
+\sigma_{m,b}(r)=
+\left|
+\left\{
+\operatorname{hi}\!\left(D_{m+1}(T_m(256r+\lambda))-b\right)
+:
+\lambda\in\mathbb{Z}_{256}
+\right\}
+\right|,
+\]
+and the total score
+\[
+\Sigma_m(b)=\sum_{r=0}^{255}\sigma_{m,b}(r).
+\]
+
+This is the exact low-byte score used in the implementation. The scan over all $b\in\mathbb{Z}_{256}$ is exhaustive. On the successful inward IVs, the true low byte $\ell_{m+1}=\operatorname{low}(s_{m+1})$ is the unique minimizer of $\Sigma_m$.
+
+\subsection{Exact projected-cycle search}
+After fixing the low byte, the implementation computes an exact projected-cycle maximizer on the corrected table
+\[
+\widetilde{T}_m(x)=D_{m+1}(T_m(x))-\ell_{m+1}.
+\]
+The code exhaustively searches all representative projected cycles for the stage and all $16$ cyclic rotations of each maximizing cycle. Every surviving raw candidate is then exact-scored by a verifier based on support collapse after peeling the candidate stage permutation. There is no statistical ranking in this phase: the candidate families, the cycle maximizer, and the verifier are all exact functions of the public $2^{16}$ codebook.
+
+\section{The outer public bootstrap for \texorpdfstring{$K_8$}{K8}}
+\subsection{Weak-IV beam search}
+The outer bootstrap begins with a random chosen-IV search. For each IV the code computes a cheap public row-branching score on the one-word codebook and retains the best $B$ IVs in a beam. This front-end is Monte Carlo: it searches for IVs whose public row structure is unusually compressed.
+
+\subsection{Hybrid exact bootstrap}
+For each IV in the beam:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item compute the exact stage-8 quotient/bootstrap candidate set by projected-cycle maximization and exact verifier scoring;
+\item close that set under the observed independent MSB-toggle ambiguity of the two 16-bit key words;
+\item exact-score the resulting small pool by an additive-differential score on the full public codebook;
+\item aggregate these exact scores across the beam IVs and select the best $K_8$.
+\end{enumerate}
+
+This is the hybrid stage-8 front-end implemented in
+\[
+\texttt{recover\_k8\_hybrid\_from\_beam()}.
+\]
+
+\subsection{Observed random-key behavior}
+For the tested random key, the 512-trial beam with beam size $16$ recovered the correct
+\[
+K_8=(\texttt{0E75},\texttt{70B5})
+\]
+on search seeds $1,2,3$:
+\begin{center}
+\href{file:///C:/Users/noaho/Desktop/upload/k8_seed_scan_1_3.txt}{\texttt{k8\_seed\_scan\_1\_3.txt}}
+\end{center}
+
+We treat this as empirical evidence, not as a proof of key-generic bootstrap success.
+
+\section{Exact recursive continuation from \texorpdfstring{$K_7$}{K7} to \texorpdfstring{$K_2$}{K2}}
+\subsection{Public recursion}
+Once $K_8$ is known, the same public stage-local recovery is applied recursively for
+\[
+m=7,6,5,4,3,2.
+\]
+At step $m$:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item peel the already recovered suffix to obtain the public reduced table $T_m$;
+\item recover the low byte of $s_{m+1}$ by the exact minimizer of $\Sigma_m$;
+\item perform the exact projected-cycle maximization and rotation scan on $\widetilde{T}_m$;
+\item exact-score the surviving raw family by the verifier;
+\item output the best pair/state candidate $(K_m,s_{m+1})$;
+\item peel the recovered stage and continue.
+\end{enumerate}
+
+\subsection{Why stage \texorpdfstring{$1$}{1} is different}
+The projected-family recursion exists only for stages $2,\dots,8$. Stage~1 has no next visible stage, so there is no stage-1 analogue of the projected-cycle family. That is why the same recursion stops at stage~2.
+
+This is not a blocker, because stage~1 admits an exact local closure once $(K_2,s_3)$ are known.
+
+\section{Exact stage-1 closure from the public stage-2 table}
+\begin{theorem}[Exact stage-1 reduction]
+Let $T_2$ be the public stage-2 reduced current table for an IV on which the recursion has recovered the correct $(K_2,s_3)$. Then
+\[
+W_2(x)=D_2(T_2(x))=B_1^{(s_1)}(x)+s_2.
+\]
+\end{theorem}
+
+\begin{proof}
+By definition of the stage-2 reduced table,
+\[
+T_2(x)=E_2(B_1^{(s_1)}(x)+s_2).
+\]
+Applying $D_2$ yields the claim.
+\end{proof}
+
+Therefore stage~1 is reduced to the exact problem:
+\begin{quote}
+Given the public table $W_2$, recover the translation $s_2$ and the unique pair $(K_1,s_1)$ such that
+\[
+W_2(x)-s_2 = E_1(x+s_1;K_1)
+\quad\text{for all }x\in\mathbb{Z}_{2^{16}}.
+\]
+\end{quote}
+
+The implementation solves this exactly:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item recover the low byte of $s_2$ by the same exact low-byte scan;
+\item scan all $256$ possibilities for the high byte of $s_2$;
+\item for each $s_2$ candidate, subtract it from $W_2$ and run the exact stage-1 local solver;
+\item if the stage-1 solution is unique, obtain $(K_1,s_1,s_2)$ exactly.
+\end{enumerate}
+
+This is the routine
+\[
+\texttt{stage1\_finish\_from\_stage2\_current()}.
+\]
+
+\section{Public full-key acceptance}
+The inward search is public only if it never asks whether a trial matches the hidden key. The present implementation satisfies that condition.
+
+\begin{definition}[Exact public acceptance test]
+Given a candidate full key
+\[
+\widehat{K}=(\widehat{K}_1,\dots,\widehat{K}_8)
+\]
+recovered from one IV, build the full one-word table
+\[
+\widehat{F}_{\mathrm{IV}}
+\]
+under the candidate key and the same IV. Accept the candidate if and only if
+\[
+\widehat{F}_{\mathrm{IV}}=F_{\mathrm{IV}}
+\]
+as functions on $\mathbb{Z}_{2^{16}}$.
+\end{definition}
+
+Because the block size is only 16 bits, this acceptance test is exact and cheap: it compares two 65536-entry tables.
+
+\begin{theorem}[Public end-to-end criterion]
+If the outer hybrid bootstrap recovers the true $K_8$ and the inward IV search reaches a trial on which the public recursion returns the true $(K_7,s_8),\dots,(K_2,s_3)$ and the stage-1 closure is unique, then the attack outputs the true full 256-bit key and accepts it by the exact codebook verification test.
+\end{theorem}
+
+\begin{proof}
+The outer bootstrap yields the true $K_8$. The exact recursion then yields the true $(K_7,s_8),\dots,(K_2,s_3)$. By the stage-1 reduction theorem, the public stage-2 reduced table has the form
+\[
+W_2=B_1^{(s_1)}+s_2.
+\]
+If the stage-1 closure is unique, it returns the unique $(K_1,s_1,s_2)$ consistent with $W_2$, hence the true stage~1 parameters. The resulting full 256-bit candidate key reproduces the true one-word permutation exactly, so the final table-comparison test accepts.
+\end{proof}
+
+\section{Worked random-key recovery}
+We now state the validated public full recovery on the tested random key.
+
+\subsection{Target}
+\[
+K=
+\texttt{2DE13EF0284A5C9BEB9FA9664ED8258BBDE5A7EA23C03CE6F3DD038E0E7570B5}.
+\]
+
+\subsection{Successful IVs}
+Outer bootstrap search:
+\begin{itemize}[leftmargin=1.5em]
+\item search trials: $512$,
+\item beam size: $16$,
+\item search seed: $1$.
+\end{itemize}
+
+Successful inward IV:
+\[
+\texttt{D17A5783A9F94E08F948B6EB536519A4}.
+\]
+
+\subsection{Recovered values}
+The public recovery obtained
+\begin{align*}
+K_8 &= (\texttt{0E75},\texttt{70B5}),\\
+K_7 &= (\texttt{F3DD},\texttt{038E}),\qquad s_8=\texttt{BE8C},\\
+K_6 &= (\texttt{23C0},\texttt{3CE6}),\qquad s_7=\texttt{E981},\\
+K_5 &= (\texttt{BDE5},\texttt{A7EA}),\qquad s_6=\texttt{EA65},\\
+K_4 &= (\texttt{4ED8},\texttt{258B}),\qquad s_5=\texttt{44A8},\\
+K_3 &= (\texttt{EB9F},\texttt{A966}),\qquad s_4=\texttt{E26E},\\
+K_2 &= (\texttt{284A},\texttt{5C9B}),\qquad s_3=\texttt{BA5B},\\
+K_1 &= (\texttt{2DE1},\texttt{3EF0}),\qquad s_2=\texttt{461F},\qquad s_1=\texttt{DF21}.
+\end{align*}
+
+The decisive public log line is
+\begin{verbatim}
+full-key candidate verified against exact one-word oracle table
+\end{verbatim}
+from
+\begin{center}
+\href{file:///C:/Users/noaho/Desktop/upload/separ_public_full_hybrid_attack_randomkey_public_debug.log}{\texttt{separ\_public\_full\_hybrid\_attack\_randomkey\_public\_debug.log}}.
+\end{center}
+
+\subsection{Example output}
+\begin{verbatim}
+full public attack succeeded on iv=D17A5783A9F94E08F948B6EB536519A4
+K8=(0E75,70B5) K7=(F3DD,038E) s8=BE8C K6=(23C0,3CE6) s7=E981
+K5=(BDE5,A7EA) s6=EA65 K4=(4ED8,258B) s5=44A8 K3=(EB9F,A966) s4=E26E
+K2=(284A,5C9B) s3=BA5B K1=(2DE1,3EF0) s2=461F s1=DF21
+\end{verbatim}
+
+\section{Monte Carlo estimate for IV-search success}
+\subsection{What is stochastic and what is exact}
+The attack has a deterministic core and a stochastic front-end.
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Deterministic core:} once a suitable IV is given, all recovery and verification steps are exact.
+\item \textbf{Stochastic part:} the search for IVs that place the oracle in the required recursive class.
+\end{itemize}
+
+We therefore model the inward search as a Bernoulli process: each random IV is a success with probability $p_{\mathrm{in}}$, conditional on the already recovered outer key suffix.
+
+\subsection{Pilot estimate}
+Pooling the earlier normal-inward pilot scans with the first observed stage-2 hit gives:
+\[
+x=1 \text{ success in } n=1727 \text{ random inward IV trials}.
+\]
+Hence the point estimate is
+\[
+\widehat{p}_{\mathrm{in}}=\frac{1}{1727}\approx 5.79\times 10^{-4}.
+\]
+
+Using the Wilson 95\% interval gives
+\[
+0.000102 \;\lesssim\; p_{\mathrm{in}} \;\lesssim\; 0.003273.
+\]
+
+These pilot data come from the exact logs collected during the recursive-trials phase and the successful full run. They are not a proof of universal key-generic success probability.
+
+\subsection{Budget-to-success conversion}
+For an inward IV budget of $N$ trials, the conditional success estimate is
+\[
+P_{\mathrm{succ}}(N)
+=
+1-(1-\widehat{p}_{\mathrm{in}})^N.
+\]
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrr}
+\toprule
+Inward IV budget $N$ & Point estimate & Wilson low & Wilson high \\
+\midrule
+256   & 0.138 & 0.026 & 0.568 \\
+512   & 0.257 & 0.051 & 0.813 \\
+1024  & 0.447 & 0.099 & 0.965 \\
+2048  & 0.695 & 0.189 & 0.999 \\
+4096  & 0.907 & 0.342 & 1.000 \\
+8192  & 0.991 & 0.567 & 1.000 \\
+10000 & 0.997 & 0.640 & 1.000 \\
+\bottomrule
+\end{tabular}
+\caption{Pilot Monte Carlo estimate for inward IV-search success conditional on outer-suffix recovery.}
+\end{table}
+
+For the outer stage-8 front-end on the tested random key, the 512-trial beam recovered the correct $K_8$ on search seeds $1,2,3$, so the present evidence suggests that the inward IV search is the dominant stochastic component.
+
+\section{Complexity and bound}
+\subsection{Oracle-query complexity}
+The implementation constructs a full one-word codebook by querying all
+\[
+2^{16}
+\]
+plaintext words under a fixed reset IV. No chosen-ciphertext queries are required by the present implementation: the inverse table is obtained by inverting the public encryption table locally.
+
+Suppose the attack is run with:
+\begin{itemize}[leftmargin=1.5em]
+\item outer weak-IV budget $N_{\mathrm{out}}$;
+\item beam size $B$;
+\item inward random-IV budget $N_{\mathrm{in}}$.
+\end{itemize}
+Then the worst-case number of one-word codebooks built is
+\[
+N_{\mathrm{out}}
+  + B
+  + 1
+  + B
+  + N_{\mathrm{in}}
+=
+N_{\mathrm{out}} + 2B + N_{\mathrm{in}} + 1,
+\]
+namely:
+\begin{enumerate}[label=(\roman*),leftmargin=1.5em]
+\item $N_{\mathrm{out}}$ codebooks for the weak-IV search;
+\item $B$ codebooks for the hybrid stage-8 rescoring on the beam;
+\item one codebook for the distinguished initial inward IV;
+\item at most $B$ additional codebooks if every beam IV is tested inward;
+\item at most $N_{\mathrm{in}}$ further inward codebooks.
+\end{enumerate}
+
+Hence the exact chosen-plaintext query bound is
+\[
+Q_{\mathrm{enc}}
+=
+\left(N_{\mathrm{out}} + 2B + N_{\mathrm{in}} + 1\right)2^{16}.
+\]
+The chosen-ciphertext query bound of the current implementation is
+\[
+Q_{\mathrm{dec}}=0.
+\]
+
+For the validated successful run in this paper,
+\[
+N_{\mathrm{out}}=512,\qquad B=16,\qquad N_{\mathrm{in}}=1,
+\]
+and the success occurred on the distinguished initial inward IV, so the realized query count was
+\[
+(512+16+1)\,2^{16}=529\cdot 65536=34{,}668{,}544
+\]
+one-word chosen encryptions.
+
+\subsection{Local deterministic work}
+Once a codebook is built, all remaining processing is local and exact. The dominant exact per-IV scans used by the successful inward recursion are the representative and cycle enumerations recorded in the validated log:
+\begin{center}
+\begin{tabular}{rcc}
+\toprule
+Stage & Representatives & Cycle work \\
+\midrule
+7 & $131072=2^{17}$ & $524288=2^{19}$ \\
+6 & $131072=2^{17}$ & $524288=2^{19}$ \\
+5 & $524288=2^{19}$ & $1048576=2^{20}$ \\
+4 & $1048576=2^{20}$ & $1048576=2^{20}$ \\
+3 & $262144=2^{18}$ & $786432=3\cdot 2^{18}$ \\
+2 & $262144=2^{18}$ & $786432=3\cdot 2^{18}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Each maximizing projected cycle is then tested over its $16$ cyclic rotations. Stage~1 is finished by an exact low-byte scan on the public stage-2 reduced table together with a scan of all $256$ high-byte hypotheses for $s_2$ and an exact local stage-1 codebook solver.
+
+Accordingly, for fixed implementation constants, the local deterministic work per tested IV is polynomial in the full codebook size $2^{16}$ and is dominated in practice by a constant number of exhaustive scans over tables of size $2^{16}$ together with the concrete projected-family loops above.
+
+\subsection{Overall bound}
+The attack is therefore Monte Carlo only through the IV budgets. For fixed budgets $(N_{\mathrm{out}},B,N_{\mathrm{in}})$, the full implemented attack has exact query bound
+\[
+Q_{\mathrm{enc}}
+=
+\left(N_{\mathrm{out}} + 2B + N_{\mathrm{in}} + 1\right)2^{16},
+\qquad
+Q_{\mathrm{dec}}=0,
+\]
+and deterministic local running time bounded by
+\[
+T_{\mathrm{local}}
+=
+O\!\left(
+\left(N_{\mathrm{out}} + 2B + N_{\mathrm{in}} + 1\right)2^{16}
+\right)
+\]
+full-table word operations, with a large but explicit stage-dependent constant determined by the representative, cycle, rotation, and stage-1 exact-solver scans listed above.
+
+\section{Implementation and runtime}
+The implemented attack is the multithreaded C program
+\[
+\texttt{separ\_public\_full\_hybrid\_attack.exe}.
+\]
+The default operator path is now the public end-to-end attack:
+\begin{verbatim}
+separ_public_full_hybrid_attack.exe --search-trials N --search-beam B
+    --search-seed S --inward-trials M --iv HEX32 --oracle-key HEX64
+\end{verbatim}
+The option
+\[
+\texttt{--force-k8}
+\]
+is retained only as a diagnostic inward-recursion mode and is not required by the public attack.
+
+On the tested machine, the validated full public run with
+\[
+N=512,\qquad B=16,\qquad M=1
+\]
+completed in approximately 26 seconds:
+\begin{itemize}[leftmargin=1.5em]
+\item about 11 seconds for the outer weak-IV search and hybrid $K_8$ bootstrap;
+\item about 15 seconds for the inward exact recursion to $K_2$, the stage-1 exact closure, and exact full-key verification.
+\end{itemize}
+
+\section{Conclusion}
+The implementation of SEPAR in \texttt{main.c} is now broken end-to-end in the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model. The attack is public in the operational sense that matters:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item it does not inject hidden state;
+\item it does not use truth-based filtering during the public IV search;
+\item it accepts a candidate full key only after exact codebook verification.
+\end{enumerate}
+
+The remaining uncertainty is not the deterministic cryptanalytic core. It is the IV-search success probability on arbitrary keys. For the tested random key, the outer bootstrap is robust and the inward success probability is well described by a small per-IV hit rate. That makes the attack naturally Monte Carlo: search for a recursive IV, then apply an exact and fully verifiable deterministic key-recovery pipeline.
+
+\end{document}
