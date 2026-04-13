@@ -1,0 +1,45 @@
+[2026-04-13 23:50:46] normal inward trial 1279/10000 iv=D17A5783A9F94E08F948B6EB536519A4
+[2026-04-13 23:50:46] stage 7 low-byte minima support=10552 count=1
+[stage7-cycles] 524288/524288 (100.0%) elapsed=   0.6s best=33416 ties=1
+[2026-04-13 23:50:46] stage 7 low=8C cycle maxima score=33416 count=1
+[stage7-rot] 16/16 (100.0%) candidates=7
+[2026-04-13 23:50:47] stage 7 true rank=1 verifier=106
+[2026-04-13 23:50:47] stage 7 winner pair=(F3DD,038E) state=BE8C verifier=106
+[2026-04-13 23:50:47] stage 6 low-byte minima support=6820 count=1
+[stage6-cycles] 524288/524288 (100.0%) elapsed=   0.6s best=35217 ties=1
+[2026-04-13 23:50:48] stage 6 low=81 cycle maxima score=35217 count=1
+[stage6-rot] 16/16 (100.0%) candidates=2
+[2026-04-13 23:50:49] stage 6 true rank=1 verifier=68
+[2026-04-13 23:50:49] stage 6 winner pair=(23C0,3CE6) state=E981 verifier=68
+[2026-04-13 23:50:49] stage 5 low-byte minima support=4319 count=1
+[stage5-cycles] 1048576/1048576 (100.0%) elapsed=   1.2s best=36242 ties=1
+[2026-04-13 23:50:50] stage 5 low=65 cycle maxima score=36242 count=1
+[stage5-rot] 16/16 (100.0%) candidates=3
+[2026-04-13 23:50:53] stage 5 true rank=1 verifier=40
+[2026-04-13 23:50:53] stage 5 winner pair=(BDE5,A7EA) state=EA65 verifier=40
+[2026-04-13 23:50:53] stage 4 low-byte minima support=2530 count=1
+[stage4-cycles] 1048576/1048576 (100.0%) elapsed=   1.2s best=50285 ties=1
+[2026-04-13 23:50:54] stage 4 low=A8 cycle maxima score=50285 count=1
+[stage4-rot] 16/16 (100.0%) candidates=9
+[2026-04-13 23:50:55] stage 4 true rank=1 verifier=24
+[2026-04-13 23:50:55] stage 4 winner pair=(4ED8,258B) state=44A8 verifier=24
+[2026-04-13 23:50:55] stage 3 low-byte minima support=1414 count=1
+[stage3-cycles] 786432/786432 (100.0%) elapsed=   0.9s best=43610 ties=1
+[2026-04-13 23:50:56] stage 3 low=6E cycle maxima score=43610 count=1
+[stage3-rot] 16/16 (100.0%) candidates=7
+[2026-04-13 23:51:01] stage 3 true rank=1 verifier=13
+[2026-04-13 23:51:01] stage 3 winner pair=(EB9F,A966) state=E26E verifier=13
+[2026-04-13 23:51:02] stage 2 low-byte minima support=806 count=1
+[stage2-cycles] 786432/786432 (100.0%) elapsed=   0.9s best=22989 ties=1
+[2026-04-13 23:51:02] stage 2 low=5B cycle maxima score=22989 count=1
+[stage2-rot] 16/16 (100.0%) candidates=0
+[2026-04-13 23:51:04] stage 2 true rank=1 verifier=8
+[2026-04-13 23:51:04] stage 2 winner pair=(284A,5C9B) state=BA5B verifier=8
+[2026-04-13 23:51:04] normal inward recursion reached stage 2 on iv=D17A5783A9F94E08F948B6EB536519A4
+[2026-04-13 23:51:04] K7=(F3DD,038E) s8=BE8C
+[2026-04-13 23:51:04] K6=(23C0,3CE6) s7=E981
+[2026-04-13 23:51:04] K5=(BDE5,A7EA) s6=EA65
+[2026-04-13 23:51:04] K4=(4ED8,258B) s5=44A8
+[2026-04-13 23:51:04] K3=(EB9F,A966) s4=E26E
+[2026-04-13 23:51:04] K2=(284A,5C9B) s3=BA5B
+[2026-04-13 23:51:04] stage 1 remains outside this exact same-stage recursion
