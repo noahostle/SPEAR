@@ -249,13 +249,18 @@ static const uint8_t IS2[16] = {12, 8, 7, 13, 3, 14, 0, 9, 15, 6, 1, 11, 10, 5, 
 static const uint8_t IS3[16] = {4, 3, 1, 5, 15, 6, 2, 8, 7, 9, 12, 10, 0, 13, 11, 14};
 static const uint8_t IS4[16] = {4, 11, 2, 5, 13, 6, 8, 3, 7, 14, 12, 1, 9, 0, 15, 10};
 
-static const uint8_t P_INVISIBLE_BITS_2[] = {0, 1, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
-static const uint8_t P_INVISIBLE_BITS_3[] = {0, 1, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
+static const uint8_t P_INVISIBLE_BITS_2[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
+static const uint8_t P_INVISIBLE_BITS_3[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
 static const uint8_t P_INVISIBLE_BITS_4[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
-static const uint8_t P_INVISIBLE_BITS_5[] = {0, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
-static const uint8_t P_INVISIBLE_BITS_6[] = {0, 1, 2, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
-static const uint8_t P_INVISIBLE_BITS_7[] = {0, 1, 2, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
-static const uint8_t P_INVISIBLE_BITS_8[] = {0, 1, 6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23, 29};
+static const uint8_t P_INVISIBLE_BITS_5[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
+static const uint8_t P_INVISIBLE_BITS_6[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
+static const uint8_t P_INVISIBLE_BITS_7[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
+/*
+ * Stage 8 projected-cycle lifting must only quotient by the universally
+ * invisible stage-local nibble-2 bits. The larger target-specialized set used
+ * earlier can exclude the true key from the raw family on random keys.
+ */
+static const uint8_t P_INVISIBLE_BITS_8[] = {6, 7, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
 static const uint8_t OUTER_BOOTSTRAP_ROWS[] = {0x00u, 0x55u, 0xAAu, 0xFFu};
 
 
