@@ -1,0 +1,917 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{verbatim}
+
+\title{A Public Stagewise End-to-End Full-Key Recovery Attack on the \texttt{main.c} Implementation of SEPAR}
+\author{}
+\date{2026-04-15}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\newtheorem{proposition}{Proposition}
+
+\newcommand{\Z}[1]{\mathbb{Z}_{#1}}
+\newcommand{\hi}{\operatorname{hi}}
+\newcommand{\lo}{\operatorname{lo}}
+\newcommand{\rot}{\operatorname{rotl}_{16}}
+\newcommand{\proj}{\operatorname{proj}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study the concrete SEPAR implementation in \texttt{SEPAR/main.c}, not an abstract idealized design. In the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model, we give a public end-to-end full-key recovery attack on the 256-bit implementation key. The attack has a stochastic front-end and a deterministic exact core. The stochastic component is a chosen-IV search for suitable stage-8 and inward contexts. Once those IV sets are hit, every subsequent step is exact: an exact public stage-8 bootstrap for $K_8$; an exact stagewise inward search in which already-solved outer stages are peeled on fresh IVs by exact fixed-pair state recovery; and an exact stage-1 closure from the public stage-2 reduced table. Final acceptance is exact: a 256-bit key is accepted if and only if it reproduces the full $2^{16}$-entry one-word oracle table on the successful IV. We define the exact attack primitives used by the implementation, prove conditional exactness, report complete recovery on difficult random keys, and give a full-program Monte Carlo over 32 pseudorandom 256-bit keys. In that experiment, the implemented attack succeeded on all 32 keys at inward budget $64$ per stage, i.e.\ with total chosen-IV budget $512+32+6\cdot 64=928$ IV contexts.
+\end{abstract}
+
+\section{Introduction}
+The target is the concrete word-oriented implementation in \texttt{SEPAR/main.c}. The relevant attack surface is the resettable 16-bit one-word oracle induced by that code. For every fixed IV, the implementation exposes a public permutation
+\[
+F_{\mathrm{IV}}:\Z{2^{16}}\to\Z{2^{16}}
+\]
+on one-word inputs. Because the block size is only 16 bits, the entire codebook is observable with $2^{16}$ chosen encryptions and can then be manipulated exactly.
+
+The attack model is:
+\begin{itemize}[leftmargin=1.5em]
+\item chosen IV;
+\item chosen plaintext and chosen ciphertext;
+\item exact state reset between oracle calls.
+\end{itemize}
+
+Under that model, the implementation gives exact public access to
+\[
+F_{\mathrm{IV}}(x)=\operatorname{Enc}_{K,\mathrm{IV}}(x),
+\qquad
+F_{\mathrm{IV}}^{-1}(y)=\operatorname{Dec}_{K,\mathrm{IV}}(y),
+\]
+and the implementation used in the attack constructs the inverse locally by inverting the public encryption table.
+
+\paragraph{Main claim.}
+The public attack implemented in
+\[
+\texttt{separ\_public\_stagewise\_attack.c}
+\]
+recovers the full 256-bit key by:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item a chosen-IV beam search and exact hybrid public bootstrap for $K_8$;
+\item an exact stagewise inward search for $K_7,K_6,\dots,K_2$ in which solved outer stages are peeled on fresh IVs by exact fixed-pair state recovery;
+\item an exact stage-1 closure from the public stage-2 reduced table;
+\item exact full-codebook verification of the recovered 256-bit key.
+\end{enumerate}
+
+What is proved below is \emph{conditional exactness}: once the sampled IV sets contain the true exact candidates required by the attack, the remainder of the recovery is deterministic and exact.
+
+\section{Exact implementation model}
+\subsection{Stage-local permutation}
+Let the eight 32-bit stage keys be
+\[
+K_i=(k_{i,0},k_{i,1})\in \Z{2^{16}}\times \Z{2^{16}},
+\qquad 1\le i\le 8.
+\]
+
+Let $\Sigma:\Z{2^{16}}\to\Z{2^{16}}$ be the nibblewise S-box layer induced by the fixed tables $S_1,S_2,S_3,S_4$ in \texttt{main.c}, and $\Sigma^{-1}$ the inverse layer induced by \texttt{IS1}, \dots, \texttt{IS4}.
+
+Let $L:\Z{2^{16}}\to\Z{2^{16}}$ be the exact linear layer implemented by \texttt{sep\_rotl16}. If
+\[
+x=(a,b,c,d)\in(\Z{16})^4
+\]
+in nibble notation, define
+\[
+M(a,b,c,d)=(a\oplus c,\;b\oplus d,\;c\oplus b,\;d\oplus a),
+\]
+identify nibble tuples with 16-bit words, and set
+\[
+L(x)=M(x)\oplus \rot(M(x),12)\oplus \rot(M(x),8).
+\]
+Its inverse is exactly \texttt{sep\_inrotl16}.
+
+For each stage $i$, the code derives two further 16-bit subkeys $\kappa_{i,2},\kappa_{i,3}$ from $(k_{i,0},k_{i,1})$:
+\begin{align*}
+u_i &= \rot(k_{i,0},6), &
+v_i &= \rot(k_{i,1},10),\\
+\kappa_{i,2} &= \bigl(u_i \vee (S_1((u_i \gg 6)\bmod 16)\ll 6)\bigr)\oplus (i+2),\\
+\kappa_{i,3} &= \bigl(v_i \vee (S_1((v_i \gg 6)\bmod 16)\ll 6)\bigr)\oplus (i+3).
+\end{align*}
+
+With $A_t(x)=x\oplus t$, the stage-local encryption permutation implemented by \texttt{enc\_block} is exactly
+\begin{equation}
+\label{eq:stage-enc}
+E_i
+=
+A_{\kappa_{i,2}\oplus \kappa_{i,3}}
+\circ \Sigma
+\circ A_{k_{i,0}\oplus k_{i,1}}
+\circ L
+\circ \Sigma
+\circ A_{\kappa_{i,3}}
+\circ L
+\circ \Sigma
+\circ A_{\kappa_{i,2}}
+\circ L
+\circ \Sigma
+\circ A_{k_{i,1}}
+\circ L
+\circ \Sigma
+\circ A_{k_{i,0}},
+\end{equation}
+and $D_i=E_i^{-1}$ is exactly \texttt{dec\_block}.
+
+\subsection{Translated stage action and one-word encryption}
+For a state word $s_i\in\Z{2^{16}}$, define the translated stage permutation
+\[
+B_i^{(s_i)}(x)=E_i(x+s_i),
+\qquad
+\bigl(B_i^{(s_i)}\bigr)^{-1}(y)=D_i(y)-s_i,
+\]
+where all additions and subtractions are in $\Z{2^{16}}$.
+
+For a reset IV with state $(s_1,\dots,s_8)$, the public one-word encryption permutation is
+\[
+F_{\mathrm{IV}}
+=
+B_8^{(s_8)}
+\circ B_7^{(s_7)}
+\circ \cdots \circ
+B_1^{(s_1)}.
+\]
+
+\subsection{State update law}
+Write the eight state words as $(s_1,\dots,s_8)$ and the intermediate stage outputs as
+\[
+v_{12},v_{23},v_{34},v_{45},v_{56},v_{67},v_{78},c.
+\]
+From \texttt{Separ\_Encryption} in \texttt{main.c}, the exact state update after one word is
+\begin{align}
+s_2' &= s_2 + v_{12} + v_{56} + s_6, \label{eq:s2}\\
+s_3' &= s_3 + v_{23} + v_{34} + s_4 + s_1, \label{eq:s3}\\
+s_4' &= s_4 + v_{12} + v_{45} + s_8, \label{eq:s4}\\
+s_5' &= s_5 + v_{23} + L', \label{eq:s5}\\
+s_6' &= s_6 + v_{12} + v_{45} + s_7, \label{eq:s6}\\
+s_7' &= s_7 + v_{23} + v_{67}, \label{eq:s7}\\
+s_8' &= s_8 + v_{45}, \label{eq:s8}\\
+s_1' &= s_1 + s_5 + v_{34} + 2v_{23} + v_{78}. \label{eq:s1}
+\end{align}
+The attack below uses only reset one-word tables, so these equations matter only because they determine which state word appears as the output translation at each stage.
+
+\section{Exact public tables used by the attack}
+\subsection{Recursive current tables}
+For $m\in\{1,\dots,7\}$ define the inner cascade
+\[
+R_m
+:=
+B_m^{(s_m)}
+\circ B_{m-1}^{(s_{m-1})}
+\circ \cdots \circ
+B_1^{(s_1)}.
+\]
+
+\begin{definition}[Current table at level $m$]
+Assume $K_{m+1},\dots,K_8$ and $s_{m+2},\dots,s_8$ are known for a fixed IV. The current table at level $m$ is the public table
+\[
+C_m:\Z{2^{16}}\to\Z{2^{16}}
+\]
+computed recursively by
+\[
+C_7=D_8\circ F_{\mathrm{IV}},
+\qquad
+C_m=D_{m+1}\bigl(C_{m+1}-s_{m+2}\bigr)
+\quad (1\le m\le 6).
+\]
+\end{definition}
+
+\begin{lemma}[Exact translation form]
+\label{lem:current-table}
+For every $m\in\{1,\dots,7\}$,
+\[
+C_m(x)=R_m(x)+s_{m+1}
+\qquad\text{for all }x\in\Z{2^{16}}.
+\]
+\end{lemma}
+
+\begin{proof}
+For $m=7$,
+\[
+F_{\mathrm{IV}}(x)=E_8(R_7(x)+s_8),
+\]
+hence
+\[
+C_7(x)=D_8(F_{\mathrm{IV}}(x))=R_7(x)+s_8.
+\]
+Assume the statement holds at level $m+1$. Then
+\[
+C_{m+1}(x)=R_{m+1}(x)+s_{m+2}
+=
+E_{m+1}(R_m(x)+s_{m+1})+s_{m+2},
+\]
+so
+\[
+C_m(x)
+=
+D_{m+1}(C_{m+1}(x)-s_{m+2})
+=
+R_m(x)+s_{m+1}.
+\]
+\end{proof}
+
+Thus the exact public object attacked at level $m$ is the inner cascade $R_m$ observed through a single output translation by $s_{m+1}$.
+
+\subsection{Exact low-byte score}
+Let
+\[
+H(y)=\left\lfloor\frac{y}{2^8}\right\rfloor\in\Z{256}
+\]
+be the output high byte. For a public table $T:\Z{2^{16}}\to\Z{2^{16}}$, a candidate low byte $b\in\Z{256}$, and a row index $r\in\Z{256}$, define
+\[
+\sigma_{T,b}(r)
+:=
+\left|
+\left\{
+H\bigl(T(256r+\lambda)-b\bigr):\lambda\in\Z{256}
+\right\}
+\right|,
+\]
+and the exact total score
+\[
+\Sigma(T;b):=\sum_{r=0}^{255}\sigma_{T,b}(r).
+\]
+This is exactly the quantity computed by \texttt{exact\_low\_byte\_scan\_u16()}.
+
+\subsection{Projected quotient cycles, representatives, and verifier}
+Define the 4-bit projection
+\[
+\proj(y):=H(y)\bmod 16\in\Z{16}.
+\]
+For a stage key pair $K_i$, define the stage-$i$ quotient map
+\[
+q_{i,K_i}(h)=\proj(E_i(256h)),
+\qquad h\in\Z{16},
+\]
+and the full high-byte quotient map
+\[
+Q_{i,K_i}(h)=H(E_i(256h)),
+\qquad h\in\Z{256}.
+\]
+
+The implementation uses the exact auxiliary sets
+\[
+\Delta_0=\{1,2,4,8,15,16\},
+\]
+\[
+\Omega=\{0,1,2,3,5,8,13,21,34,55,89,144,200,233,255\},
+\]
+\[
+\mathcal R=\{0x00,0x55,0xAA,0xFF\}.
+\]
+
+The corrected implementation uses the same universal invisible-bit set for every stage $i\in\{2,\dots,8\}$:
+\[
+P_i=\{6,7,12,13,14,15,18,19,20,21,22,23\}.
+\]
+Hence
+\[
+|P_i|=12,\qquad |V_i|=20,
+\]
+and every representative table enumerates exactly
+\[
+2^{20}=1{,}048{,}576
+\]
+visible masks. Stages $2,\dots,7$ canonicalize 16-cycles by rotation to first entry $0$; stage 8 uses raw cycles.
+
+For any public table $T$, define the exact projected edge-count matrix
+\[
+M_T(a,b)
+:=
+\left|
+\left\{
+(x,\delta)\in \Z{2^{16}}\times \Delta_0 :
+\proj(T(x))=a,\;
+\proj(T(x+\delta))=b
+\right\}
+\right|,
+\qquad a,b\in\Z{16}.
+\]
+If $c=(c_0,\dots,c_{15})$ is a 16-cycle, define the exact cycle score
+\[
+S_T(c)=\sum_{j=0}^{15}M_T(c_j,c_{j+1\bmod 16}).
+\]
+
+To lift a projected cycle to a 256-point high-byte order, the implementation builds the exact 8-bit transition matrix
+\[
+N_T(u,v)
+:=
+\left|
+\left\{
+(x,\delta)\in \Z{2^{16}}\times \Delta_0 :
+H(T(x))=u,\;
+H(T(x+\delta))=v
+\right\}
+\right|,
+\qquad u,v\in\Z{256},
+\]
+solves exact $16\times 16$ assignments between adjacent cycle layers by the Hungarian algorithm, and accepts only wrap permutations forming one 16-cycle.
+
+Given a recovered cycle/order pair, the implementation enumerates every compatible representative-group base key and expands all invisible masks. It then checks exact equality against the reconstructed order targets first on $\Omega$ and then on all 256 values. Finally it exact-scores the surviving candidates by
+\[
+V_i(K_i;T)
+:=
+\sum_{r\in\mathcal R}
+\min_{b\in\Z{256}}
+\left|
+\left\{
+H\bigl(D_i(T(256r+\lambda))-b\bigr):\lambda\in\Z{256}
+\right\}
+\right|.
+\]
+This is the verifier used both in the outer bootstrap and in the stagewise inward search.
+
+\section{The outer public bootstrap for \texorpdfstring{$K_8$}{K8}}
+\subsection{Weak-IV beam search}
+For an IV, define the exact row score
+\[
+\rho(\mathrm{IV})
+:=
+\left|
+\left\{
+H(F_{\mathrm{IV}}(\lambda)):\lambda\in\Z{256}
+\right\}
+\right|.
+\]
+The implementation keeps the $B$ IVs with smallest $\rho(\mathrm{IV})$. This is a search-ordering device only; it is not part of the acceptance criterion.
+
+\subsection{Hybrid exact stage-8 recovery}
+For each IV in the beam, the implementation:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item computes the exact stage-8 quotient/bootstrap candidate set by projected-cycle maximization and exact verifier scoring;
+\item closes that set under the independent MSB toggles
+\[
+(a,b)\mapsto(a\oplus \epsilon_0 2^{15},\;b\oplus \epsilon_1 2^{15});
+\]
+\item exact-scores the resulting small pool by the additive differential score
+\[
+A_{\mathrm{IV}}(K_8)
+:=
+\sum_{\delta\in\Delta_0}
+\max_{\Delta\in\Z{2^{16}}}
+\left|
+\left\{
+x:
+D_8(F_{\mathrm{IV}}(x+\delta);K_8)-D_8(F_{\mathrm{IV}}(x);K_8)=\Delta
+\right\}
+\right|;
+\]
+\item aggregates those exact scores across the beam and outputs the best $K_8$.
+\end{enumerate}
+
+\section{Exact stagewise inward search from \texorpdfstring{$K_7$}{K7} to \texorpdfstring{$K_2$}{K2}}
+\subsection{Exact fixed-pair peeling on fresh IVs}
+The inward phase is not a one-IV cascade. Once the outer bootstrap has fixed $K_8$, the program samples a fresh IV set independently at each target stage. On each such IV it peels every already-solved outer stage by exact state recovery for the fixed known stage key, and only then attacks the next unknown stage.
+
+Fix a target stage $t\in\{7,6,5,4,3,2\}$ and suppose a branch has already fixed
+\[
+K_{t+1},K_{t+2},\dots,K_8.
+\]
+Let $\eta$ be a fresh IV. Define
+\[
+C_7^{(\eta)}:=D_8\circ F_\eta.
+\]
+If $K_8$ is correct, then by Lemma~\ref{lem:current-table},
+\[
+C_7^{(\eta)}(x)=R_7^{(\eta)}(x)+s_8^{(\eta)}.
+\]
+
+For a fixed stage $m\in\{7,\dots,t+1\}$ and a public table $T$, define the minimizing low-byte set
+\[
+L_m(T):=\arg\min_{b\in\Z{256}}\Sigma(T;b).
+\]
+For a fixed known pair $K_m$, define the exact fixed-pair state solver
+\begin{equation}
+\label{eq:fixed-pair-state-solver}
+\mathcal{S}_m(T;K_m)
+:=
+\arg\min_{\substack{s=b+256h\\ b\in L_m(T),\,h\in\Z{256}}}
+V_m(K_m;T-s),
+\end{equation}
+with lexicographic tie-break on $s$. This is exactly \texttt{recover\_known\_pair\_state\_fast()}.
+
+Starting from $C_7^{(\eta)}$, the program peels already-solved outer stages by
+\begin{align}
+\widehat{s}_{m+1}^{(\eta)} &:= \mathcal{S}_m(C_m^{(\eta)};K_m), \label{eq:stagewise-state}\\
+C_{m-1}^{(\eta)} &:= D_m\!\left(C_m^{(\eta)}-\widehat{s}_{m+1}^{(\eta)};K_m\right), \qquad m=7,6,\dots,t+1. \label{eq:stagewise-peel}
+\end{align}
+If every known outer pair on the current branch is correct and every fixed-pair state recovery returns the true state word, then
+\[
+C_t^{(\eta)}(x)=R_t^{(\eta)}(x)+s_{t+1}^{(\eta)}.
+\]
+
+\subsection{Exact target-stage candidate sets}
+For a fixed target stage $t$ and fresh IV $\eta$, let
+\[
+\mathcal{A}_t(\eta;K_{t+1},\dots,K_8)
+\]
+denote the set of all minimum-verifier rows produced by applying the exact stage-$t$ scan of Sections~3.2--3.4 to the prepared table $C_t^{(\eta)}$. Every element of $\mathcal{A}_t$ is a pair
+\[
+(K_t,s_{t+1})\in(\Z{2^{16}})^2.
+\]
+Write
+\[
+\Pi_{\mathrm{pair}}\mathcal{A}_t(\eta;K_{t+1},\dots,K_8)
+\]
+for the set of stage-key pairs appearing in those rows.
+
+Let
+\[
+\Omega_t(N)=\{\eta_{t,1},\dots,\eta_{t,N}\}
+\]
+be the first $N$ fresh IVs in the deterministic stage-$t$ IV stream. Define the exact stagewise candidate-pair set
+\begin{equation}
+\label{eq:stagewise-pair-set}
+\mathcal{P}_t^{(N)}(K_{t+1},\dots,K_8)
+:=
+\bigcup_{\eta\in\Omega_t(N)}
+\Pi_{\mathrm{pair}}\mathcal{A}_t(\eta;K_{t+1},\dots,K_8).
+\end{equation}
+The implementation also records the exact hit multiplicity
+\begin{equation}
+\label{eq:stagewise-hit-count}
+h_t^{(N)}(K_t)
+:=
+\left|
+\left\{
+\eta\in\Omega_t(N):
+K_t\in\Pi_{\mathrm{pair}}\mathcal{A}_t(\eta;K_{t+1},\dots,K_8)
+\right\}
+\right|,
+\end{equation}
+sorts candidates by decreasing $h_t^{(N)}$, and recursively explores all distinct pairs in that exact order. This ordering affects runtime only: no candidate in~\eqref{eq:stagewise-pair-set} is discarded.
+
+\subsection{Exact recursive search tree}
+Define recursively the exact search procedures
+\[
+\mathfrak{S}_t^{(N)}(K_{t+1},\dots,K_8),
+\qquad t=7,6,\dots,2,
+\]
+as follows.
+
+For $t\in\{7,6,5,4,3\}$:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item build $\mathcal{P}_t^{(N)}(K_{t+1},\dots,K_8)$ by~\eqref{eq:stagewise-pair-set};
+\item enumerate all $K_t\in\mathcal{P}_t^{(N)}$ in decreasing order of~\eqref{eq:stagewise-hit-count};
+\item recurse to
+\[
+\mathfrak{S}_{t-1}^{(N)}(K_t,K_{t+1},\dots,K_8).
+\]
+\end{enumerate}
+
+For $t=2$, there is no further pair recursion. Instead, for every $\eta\in\Omega_2(N)$ the program:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item prepares the exact public stage-2 current table $C_2^{(\eta)}$ by fixed-pair peeling of the already-solved suffix;
+\item computes the exact minimum-verifier row set $\mathcal{A}_2(\eta;K_3,\dots,K_8)$;
+\item for every row $(K_2,s_3)\in \mathcal{A}_2(\eta;K_3,\dots,K_8)$, invokes the exact stage-1 closure of Section~6;
+\item accepts only if the recovered 256-bit key reproduces the entire $2^{16}$-entry one-word oracle table on the same IV.
+\end{enumerate}
+
+\paragraph{Why stage 1 is separate.}
+The projected-family scan exists only for stages $2,\dots,8$. Stage 1 has no visible successor stage and therefore no stage-1 quotient-cycle analogue. It is closed exactly from the stage-2 reduced table.
+
+\begin{proposition}[Monotonicity in the inward budget]
+\label{prop:monotone-budget}
+Fix a key, the outerly recovered $K_8$, and the deterministic per-stage IV streams. If the stagewise attack succeeds with inward budget $N$, then it also succeeds with every larger budget $N'\ge N$.
+\end{proposition}
+
+\begin{proof}
+For every stage $t$, the sampled IV set $\Omega_t(N)$ is a prefix of $\Omega_t(N')$. Hence
+\[
+\mathcal{P}_t^{(N)}(K_{t+1},\dots,K_8)
+\subseteq
+\mathcal{P}_t^{(N')}(K_{t+1},\dots,K_8)
+\]
+for every fixed suffix. Thus every branch explored at budget $N$ is also explored at budget $N'$. At stage 2 the tested IV set is likewise prefix-monotone, so any successful stage-2 IV at budget $N$ is still tested at budget $N'$. Therefore success is monotone.
+\end{proof}
+
+\section{Exact stage-1 closure from the public stage-2 table}
+\subsection{Reduction to a single translated stage}
+Assume the stagewise recursion has recovered the true $(K_2,s_3)$ on some successful stage-2 IV. Then
+\[
+C_2(x)=E_2(E_1(x+s_1)+s_2)+s_3.
+\]
+Define
+\[
+W_2(x)=D_2(C_2(x)-s_3;K_2).
+\]
+Then exactly
+\begin{equation}
+\label{eq:stage1-reduction}
+W_2(x)=E_1(x+s_1)+s_2.
+\end{equation}
+
+\subsection{Low-byte recovery for \texorpdfstring{$s_2$}{s2}}
+The implementation first applies the same exact low-byte scan to $W_2$. For each candidate
+\[
+s_2^\star\in\Z{2^{16}},
+\]
+it forms
+\[
+C^\star(x)=W_2(x)-s_2^\star.
+\]
+Any true stage-1 solution must satisfy
+\[
+C^\star(x)=E_1(x+s_1;K_1).
+\]
+
+\subsection{Step 1: exact row-signature inversion}
+For $u\in\Z{256}$ define the 16-point row signature
+\[
+R_u^{C^\star}(h)=\proj(C^\star(u+256h)),
+\qquad h\in\Z{16}.
+\]
+Write
+\[
+s_1=s_{1,\mathrm{lo}}+256\,s_{1,\mathrm{mid}}+4096\,s_{1,\mathrm{hi}},
+\]
+with $s_{1,\mathrm{lo}}\in\Z{256}$ and $s_{1,\mathrm{mid}},s_{1,\mathrm{hi}}\in\Z{16}$.
+
+For a candidate $s_{1,\mathrm{lo}}$, the routine \texttt{stage1\_step1\_candidates\_u16()} checks the exact carry partition:
+\begin{quote}
+all rows with $u+s_{1,\mathrm{lo}}<256$ must share one common signature $\sigma$, and all rows with $u+s_{1,\mathrm{lo}}\ge 256$ must share the one-step rotation $\operatorname{rot}_1(\sigma)$.
+\end{quote}
+For each surviving $s_{1,\mathrm{lo}}$ and each $s_{1,\mathrm{mid}}\in\Z{16}$, the implementation rotates $\sigma$ by $16-s_{1,\mathrm{mid}}$ and inverts it through the exact precomputed family
+\[
+\nu_{a,b,c,d}:\Z{16}\to\Z{16},
+\]
+where
+\[
+\nu_{a,b,c,d}(x)=S_2\bigl(t_4(x)\oplus a\oplus b\bigr)\oplus c\oplus d.
+\]
+with
+\begin{align*}
+t_1(x)&=S_2(x\oplus a),\\
+t_2(x)&=S_2(t_1(x)\oplus b),\\
+t_3(x)&=S_2(t_2(x)\oplus c),\\
+t_4(x)&=S_2(t_3(x)\oplus d).
+\end{align*}
+This yields exact candidates for
+\[
+s_{1,\mathrm{lo}},\quad s_{1,\mathrm{mid}},\quad a,\quad b,\quad c,\quad d.
+\]
+
+\subsection{Step 2: exact lift to full \texorpdfstring{$K_1$}{K1} candidates}
+The routine next uses exact inverse-image tables for the derived-key high nibbles of $\kappa_{1,2}$ and $\kappa_{1,3}$. For each surviving $(s_{1,\mathrm{lo}},s_{1,\mathrm{mid}},a,b,c,d)$, each
+\[
+\ell_6\in I_2(c),\qquad \beta\in I_3(d),
+\]
+and each 12-bit free mask $f\in\Z{2^{12}}$, it constructs
+\begin{align}
+k_{1,0}
+&=
+\ell_6
+\;\vee\;
+\bigl((f\bmod 4)\ll 6\bigr)
+\;\vee\;
+(a\ll 8)
+\;\vee\;
+\left(\left(\left\lfloor\frac{f}{4}\right\rfloor\bmod 16\right)\ll 12\right), \label{eq:k10-lift}\\
+k_{1,1}
+&=
+(\beta\bmod 4)
+\;\vee\;
+\left(\left(\left\lfloor\frac{f}{64}\right\rfloor\bmod 64\right)\ll 2\right)
+\;\vee\;
+(b\ll 8)
+\;\vee\;
+\left(\left(\left\lfloor\frac{\beta}{4}\right\rfloor\bmod 16\right)\ll 12\right). \label{eq:k11-lift}
+\end{align}
+
+The resulting pair is exact-tested on the 12-bit slice
+\[
+X_{12}=\{0,\dots,4095\}
+\]
+by comparing nibble $(7..4)$ values:
+\[
+\left\lfloor\frac{E_1((x+s_{1,\mathrm{lo}}+256s_{1,\mathrm{mid}})\bmod 2^{12};K_1)}{2^4}\right\rfloor\bmod 16
+=
+\left\lfloor\frac{C^\star(x)}{2^4}\right\rfloor\bmod 16
+\qquad\text{for all }x\in X_{12}.
+\]
+
+\subsection{Step 3: exact recovery of the top nibble of \texorpdfstring{$s_1$}{s1}}
+For each surviving pair $K_1$, the implementation scans all 16 possibilities for $s_{1,\mathrm{hi}}$ and performs full exact verification:
+\[
+E_1(x+s_1;K_1)=C^\star(x)
+\qquad\text{for all }x\in\Z{2^{16}}.
+\]
+If exactly one triple $(K_1,s_1,s_2)$ survives, the stage-1 closure succeeds.
+
+\begin{theorem}[Exactness of the stage-1 closure]
+\label{thm:stage1}
+Let $W_2$ be the exact public table of~\eqref{eq:stage1-reduction}. If there is a unique triple $(K_1,s_1,s_2)$ satisfying
+\[
+W_2(x)=E_1(x+s_1;K_1)+s_2
+\qquad\text{for all }x\in\Z{2^{16}},
+\]
+then \texttt{stage1\_finish\_from\_stage2\_current()} returns exactly that triple.
+\end{theorem}
+
+\begin{proof}
+The routine is exhaustive over all candidates for the low and high bytes of $s_2$, all exact row-signature solutions for $(s_{1,\mathrm{lo}},s_{1,\mathrm{mid}},a,b,c,d)$, all inverse-image candidates from $I_2(c)$ and $I_3(d)$, all $2^{12}$ free masks in~\eqref{eq:k10-lift}--\eqref{eq:k11-lift}, and all 16 possibilities for $s_{1,\mathrm{hi}}$. Every surviving candidate is tested by exact equality either on the 12-bit slice or on the full $2^{16}$-entry table, and the routine accepts only if the number of full solutions is exactly one. Hence a unique solution is returned exactly.
+\end{proof}
+
+\section{Public full-key acceptance and conditional correctness}
+\begin{definition}[Exact public acceptance test]
+Given recovered pairs
+\[
+\widehat{K}=(\widehat{K}_1,\dots,\widehat{K}_8),
+\]
+rebuild the candidate one-word table
+\[
+\widehat{F}_{\mathrm{IV}}
+\]
+under the same IV and accept if and only if
+\[
+\widehat{F}_{\mathrm{IV}}=F_{\mathrm{IV}}
+\]
+as functions on $\Z{2^{16}}$.
+\end{definition}
+
+Because the block size is only 16 bits, this is an exact comparison of two $65536$-entry tables.
+
+\begin{theorem}[Conditional exactness of the full public attack]
+\label{thm:main}
+Fix the exact beam IV set used by the outer stage-8 search and the exact fresh-IV sets $\Omega_t(N)$ used by the stagewise search. Assume:
+\begin{enumerate}[label=(\alph*),leftmargin=1.5em]
+\item the outer hybrid bootstrap ranks the true $K_8$ first;
+\item for each $t\in\{7,6,5,4,3\}$, on the branch
+\[
+(K_{t+1},\dots,K_8)=(K_{t+1}^{\star},\dots,K_8^{\star}),
+\]
+the true pair $K_t^{\star}$ belongs to the exact candidate set
+\[
+\mathcal{P}_t^{(N)}(K_{t+1}^{\star},\dots,K_8^{\star});
+\]
+\item for some $\eta\in\Omega_2(N)$ on the true branch, the exact stage-2 scan contains the true row $(K_2^{\star},s_3^{\star})$, and the stage-1 system
+\[
+W_2(x)=E_1(x+s_1;K_1)+s_2
+\]
+has a unique solution $(K_1^{\star},s_1^{\star},s_2^{\star})$.
+\end{enumerate}
+Then the implementation outputs the true 256-bit key and accepts it by the exact codebook test. No false full key can be accepted.
+\end{theorem}
+
+\begin{proof}
+By assumption~(a), the recovered outer pair is the true $K_8^{\star}$. Consider the recursive branch
+\[
+K_7^{\star},K_6^{\star},\dots,K_3^{\star}.
+\]
+At stage $t$, assumption~(b) says that
+\[
+K_t^{\star}\in \mathcal{P}_t^{(N)}(K_{t+1}^{\star},\dots,K_8^{\star}).
+\]
+Since the implementation eventually explores every candidate in that set, the true branch is never pruned. Therefore the recursive search reaches stage 2 on the true suffix.
+
+Now fix the stage-2 IV $\eta$ from assumption~(c). On the true branch, the fixed-pair peeling equations~\eqref{eq:stagewise-state}--\eqref{eq:stagewise-peel} reconstruct the exact public current table
+\[
+C_2^{(\eta)}(x)=R_2^{(\eta)}(x)+s_3^{(\eta)}.
+\]
+Since the exact stage-2 scan includes the true row $(K_2^{\star},s_3^{\star})$, the reduction~\eqref{eq:stage1-reduction} holds for the true reduced table
+\[
+W_2(x)=D_2(C_2^{(\eta)}(x)-s_3^{\star};K_2^{\star}).
+\]
+By assumption~(c) and Theorem~\ref{thm:stage1}, the stage-1 closure returns exactly the unique true triple $(K_1^{\star},s_1^{\star},s_2^{\star})$. Hence the reconstructed full key is the true implementation key. Finally, the acceptance test compares complete $2^{16}$-entry tables, so no false full key can be accepted.
+\end{proof}
+
+\section{Worked random-key recovery}
+\subsection{Target key and successful IVs}
+As a representative difficult instance, consider the random key
+\[
+K=
+\texttt{8FCD06ACB99FB6F77135F7ABCD27778AD08489BA2C6DE01CFC17FF0CE0F553C1}.
+\]
+
+The successful public stagewise run used
+\begin{itemize}[leftmargin=1.5em]
+\item outer beam budget $N_{\mathrm{out}}=512$;
+\item beam size $B=32$;
+\item search seed $1$;
+\item inward budget $N=64$ per target stage;
+\item successful stage-2 IV
+\[
+\texttt{F71831A507C6103EBB51EC0AC07A0C60}.
+\]
+\end{itemize}
+
+\subsection{Recovered values}
+The public recovery returned
+\begin{align*}
+K_8 &= (\texttt{E0F5},\texttt{53C1}),\\
+K_7 &= (\texttt{FC17},\texttt{FF0C}),\qquad s_8=\texttt{675F},\\
+K_6 &= (\texttt{2C6D},\texttt{E01C}),\qquad s_7=\texttt{E454},\\
+K_5 &= (\texttt{D084},\texttt{89BA}),\qquad s_6=\texttt{328C},\\
+K_4 &= (\texttt{CD27},\texttt{778A}),\qquad s_5=\texttt{8D1B},\\
+K_3 &= (\texttt{7135},\texttt{F7AB}),\qquad s_4=\texttt{A2CF},\\
+K_2 &= (\texttt{B99F},\texttt{B6F7}),\qquad s_3=\texttt{6DEA},\\
+K_1 &= (\texttt{8FCD},\texttt{06AC}),\qquad s_2=\texttt{7F43},\qquad s_1=\texttt{27B3}.
+\end{align*}
+
+The decisive public log line is
+\begin{verbatim}
+full-key candidate verified against exact one-word oracle table
+\end{verbatim}
+from \texttt{stagewise\_attack\_hard1\_default64.log}.
+
+\section{Monte Carlo estimate for full-program random-key success}
+\subsection{Experiment design}
+This Monte Carlo evaluates the entire implemented attack, not a conditional inward probe. We sampled
+\[
+m=32
+\]
+independent pseudorandom 256-bit keys by
+\[
+K_j:=\operatorname{SHA256}(\texttt{``stagewise-mc-key-}j\texttt{''}),
+\qquad j=0,\dots,31.
+\]
+For each sampled key we ran the full public program
+\[
+\texttt{separ\_public\_stagewise\_attack.exe}
+\]
+with
+\[
+N_{\mathrm{out}}=512,\qquad B=32,\qquad \texttt{search-seed}=1,\qquad \texttt{workers}=16,
+\]
+and inward budgets
+\[
+N\in\{64,128,256\}.
+\]
+Because of Proposition~\ref{prop:monotone-budget}, success is monotone in $N$. Accordingly, once a key succeeded at $N=64$, the larger-budget rows were recorded as monotone skips. The raw data are logged in
+\[
+\texttt{monte\_carlo\_stagewise.log}.
+\]
+
+\subsection{Observed success rates}
+For each tested budget, the attack succeeded on all 32 sampled keys. Let
+\[
+P_N:=\Pr[\text{full public attack succeeds on a random key at inward budget }N]
+\]
+under the fixed outer parameters
+\[
+(N_{\mathrm{out}},B,\texttt{search-seed})=(512,32,1).
+\]
+For 32 successes in 32 trials, the exact two-sided Clopper--Pearson 95\% lower confidence limit is
+\[
+\underline{P}_{95}(32/32)=0.891118839\ldots
+\]
+hence
+\[
+P_N\ge 0.8911
+\]
+at confidence level 95\% for every tested budget $N\in\{64,128,256\}$.
+
+The measured success table is:
+\begin{center}
+\small
+\begin{tabular}{>{\raggedleft\arraybackslash}p{1.3cm}>{\raggedleft\arraybackslash}p{2.8cm}>{\raggedleft\arraybackslash}p{2.8cm}>{\raggedleft\arraybackslash}p{1.2cm}>{\raggedleft\arraybackslash}p{1.9cm}}
+\toprule
+Budget $N$ per stage & Total IV contexts & Chosen encryptions & Successes & 95\% lower bound \\
+\midrule
+64    & $512+32+6\cdot 64=928$   & $60{,}817{,}408$  & $32/32$ & $0.8911$ \\
+128   & $512+32+6\cdot 128=1312$ & $85{,}983{,}232$  & $32/32$ & $0.8911$ \\
+256   & $512+32+6\cdot 256=2080$ & $136{,}314{,}880$ & $32/32$ & $0.8911$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Because the budget-64 run already succeeded on all 32 keys, the larger-budget rows do not add new observed failures; they certify that success remained perfect when the inward budget was increased.
+
+\subsection{Runtime on the Monte Carlo sample}
+For the 32 full successes at budget $N=64$, the measured wall-clock times on the user's machine were:
+\begin{center}
+\begin{tabular}{rr}
+\toprule
+Statistic & Seconds \\
+\midrule
+mean   & $104.805$ \\
+median & $103.049$ \\
+min    & $60.717$ \\
+max    & $156.716$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Thus, on the tested machine, the default full attack is a seconds-to-minutes computation rather than a brute-force search.
+
+\section{Complexity and bound}
+\subsection{Oracle-query complexity}
+One full one-word codebook requires exactly
+\[
+2^{16}
+\]
+chosen encryptions. The implementation does not require chosen-ciphertext queries, so
+\[
+Q_{\mathrm{dec}}=0.
+\]
+
+For outer budget $N_{\mathrm{out}}$, beam size $B$, and per-stage inward budget $N$, the successful direct path of the stagewise attack builds:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item $N_{\mathrm{out}}$ outer-search codebooks;
+\item $B$ exact beam codebooks for the hybrid $K_8$ bootstrap;
+\item $N$ fresh-IV codebooks for each target stage $t=7,6,5,4,3,2$.
+\end{enumerate}
+Hence the exact chosen-encryption count on a no-backtracking successful path is
+\begin{equation}
+\label{eq:qenc-direct}
+Q_{\mathrm{enc}}^{\mathrm{direct}}
+=
+\bigl(N_{\mathrm{out}}+B+6N\bigr)2^{16}.
+\end{equation}
+With the default parameters
+\[
+N_{\mathrm{out}}=512,\qquad B=32,\qquad N=64,
+\]
+this becomes
+\[
+Q_{\mathrm{enc}}^{\mathrm{direct}}
+=(512+32+384)2^{16}
+=928\cdot 65536
+=60{,}817{,}408.
+\]
+
+\subsection{Exact branch-aware bound}
+The implementation is recursive and may, in principle, backtrack over exact candidate-pair sets before reaching the accepting branch. To state the exact implemented bound, let
+\[
+M_t(N)
+\]
+be the maximum, over all keys and all previously fixed suffixes $(K_{t+1},\dots,K_8)$ reachable by the program, of the cardinality of the exact stagewise candidate set
+\[
+\mathcal{P}_t^{(N)}(K_{t+1},\dots,K_8).
+\]
+Define recursively the maximum number of fresh-IV codebooks visited below stage $t$ by
+\begin{align}
+T_2(N) &:= N, \label{eq:T2}\\
+T_t(N) &:= N + M_t(N)\,T_{t-1}(N), \qquad t=3,4,5,6,7. \label{eq:Trec}
+\end{align}
+Then the exact program-level chosen-encryption bound is
+\begin{equation}
+\label{eq:qenc-branch}
+Q_{\mathrm{enc}}
+=
+\bigl(N_{\mathrm{out}}+B+T_7(N)\bigr)2^{16},
+\qquad
+Q_{\mathrm{dec}}=0.
+\end{equation}
+Equation~\eqref{eq:qenc-branch} is the correct exact bound for the implemented recursive search tree. Equation~\eqref{eq:qenc-direct} is the realized cost when the true branch is reached without backtracking, which is what occurred on all 32 Monte Carlo keys at budget $N=64$.
+
+\subsection{Exact local work}
+Once a codebook is built, all remaining work is local and exact. For each stage-$t$ fresh IV, the local work consists of:
+\begin{enumerate}[label=\arabic*.,leftmargin=1.5em]
+\item exact fixed-pair state recovery for each already-solved stage above $t$, using~\eqref{eq:fixed-pair-state-solver};
+\item one exact stage-$t$ low-byte scan;
+\item one exact maximizing projected-cycle search over the $2^{20}$-entry representative space;
+\item exact order reconstruction by Hungarian assignment lifts;
+\item exact candidate lifting and exact verifier minimization;
+\item for $t=2$, the exact stage-1 closure of Section~6 together with full-table verification.
+\end{enumerate}
+
+\subsection{Overall bound}
+For fixed budgets $(N_{\mathrm{out}},B,N)$, the exact implemented query bound is~\eqref{eq:qenc-branch}. On the empirically dominant no-backtracking path, it collapses to the direct-path cost~\eqref{eq:qenc-direct}. For the default parameters of the current binary, the direct chosen-encryption count is
+\[
+60{,}817{,}408.
+\]
+Empirically, on the user's machine, the 32-key Monte Carlo at the default budget $N=64$ averaged $104.805$ seconds per full key recovery, with median $103.049$ seconds and worst case $156.716$ seconds.
+
+\section{Implementation and runtime}
+The attack is implemented in the multithreaded C program
+\[
+\texttt{separ\_public\_stagewise\_attack.exe}.
+\]
+The public end-to-end runner is
+\begin{verbatim}
+separ_public_stagewise_attack.exe --search-trials N --search-beam B
+    --search-seed S --inward-trials M --workers W --oracle-key HEX64
+\end{verbatim}
+with optional \texttt{--verbose} output. In the default mode the program shows only the current phase, progress, best IV, current IV, and best recovered key/state values in a compact in-place display.
+
+Operationally, the public path:
+\begin{itemize}[leftmargin=1.5em]
+\item recovers $K_8$ only by the public hybrid score over the beam;
+\item recovers stages $7$ through $2$ only by the exact stagewise recursion of Section~5;
+\item recovers stage 1 only by the exact closure of Theorem~\ref{thm:stage1};
+\item accepts a full key only after exact equality of the recovered codebook with the oracle codebook.
+\end{itemize}
+
+The default parameters of the current binary are
+\[
+N_{\mathrm{out}}=512,\qquad B=32,\qquad N=64,\qquad W=16.
+\]
+These are exactly the parameters used in the full-program Monte Carlo of Section~8.
+
+\section{Conclusion}
+The \texttt{main.c} implementation of SEPAR is broken end-to-end in the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model. The decisive structural fact is that every stage is exposed through an exact translated $2^{16}$-point permutation, and once a suffix stage key is fixed the corresponding IV-local state word can itself be recovered exactly and peeled away on fresh IVs. This yields the stagewise recursion of Section~5 and removes the dependence on one exceptionally good inward IV.
+
+The attack is therefore not a heuristic key-ranking experiment. Conditional on the sampled IV sets containing the true exact candidates, the recovery is deterministic and exact; false full keys are excluded by complete one-word table equality. On a 32-key Monte Carlo sample of the full program, the default parameter set succeeded on all keys, giving a 95\% exact lower confidence bound of $0.8911$ on the random-key success probability at the tested budget.
+
+
+\end{document}

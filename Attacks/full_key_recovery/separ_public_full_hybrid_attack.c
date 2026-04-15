@@ -212,6 +212,12 @@ typedef struct {
 } WeakIVCandidate;
 
 typedef struct {
+    uint16_t iv_words[8];
+    uint32_t partial_support;
+    uint16_t low_count;
+} InwardWeakIVCandidate;
+
+typedef struct {
     KeyPair pair;
     uint64_t aggregate_score;
     uint32_t hits;
@@ -223,6 +229,7 @@ typedef struct {
     uint16_t iv_words[8];
     KeyPair pairs[9];
     uint16_t states[9];
+    uint32_t stage_verifier[9];
     uint16_t s2;
     uint16_t s1;
     size_t stage1_solution_count;
@@ -270,6 +277,9 @@ static int g_debug_output = 0;
 
 static uint32_t chosen_iv_row_score_table(const uint16_t *table);
 static void weak_iv_candidate_insert(WeakIVCandidate *beam, size_t *beam_count, size_t beam_cap, const uint16_t iv_words[8], uint32_t row_score);
+static void inward_weak_iv_candidate_insert(InwardWeakIVCandidate *beam, size_t *beam_count, size_t beam_cap, const uint16_t iv_words[8], uint32_t partial_support, uint16_t low_count);
+static void inward_refine_insert(InwardProbeResult *beam, size_t *beam_count, size_t beam_cap, const InwardProbeResult *cand);
+static int probe_inward_selector_exact(const Options *opt, const uint16_t iv_words[8], KeyPair k8_pair, uint8_t min_stage, InwardProbeResult *out);
 static void format_iv_hex(const uint16_t iv_words[8], char out[33]);
 static uint64_t stage8_additive_differential_score(const uint16_t *table, KeyPair pair, const uint16_t *deltas, size_t delta_count);
 static int pair_cmp(KeyPair a, KeyPair b);
@@ -1735,6 +1745,129 @@ static void search_weak_ivs(const Options *opt, WeakIVCandidate *beam, size_t *b
     if (g_debug_output || !g_live.console_output) putchar('\n');
 }
 
+static void inward_partial_low_selector_score(const uint16_t key_words[16],
+                                              const uint16_t iv_words[8],
+                                              KeyPair k8_pair,
+                                              uint32_t *out_best_support,
+                                              uint16_t *out_low_count)
+{
+    SeparCtx ctx;
+    uint16_t peeled[sizeof(OUTER_BOOTSTRAP_ROWS) / sizeof(OUTER_BOOTSTRAP_ROWS[0])][256];
+    uint32_t best_support = UINT32_MAX;
+    uint16_t low_count = 0u;
+    ctx_after_prefix(key_words, iv_words, NULL, 0u, &ctx);
+    for (size_t ri = 0u; ri < sizeof(OUTER_BOOTSTRAP_ROWS) / sizeof(OUTER_BOOTSTRAP_ROWS[0]); ri++) {
+        uint16_t base = (uint16_t)(OUTER_BOOTSTRAP_ROWS[ri] << 8);
+        for (uint32_t lo = 0u; lo < 256u; lo++) {
+            uint16_t pt = (uint16_t)(base | lo);
+            peeled[ri][lo] = dec_block(separ_encrypt_word_simple(pt, &ctx, key_words), k8_pair, 8u);
+        }
+    }
+    for (uint32_t low = 0u; low < 256u; low++) {
+        uint32_t total_support = 0u;
+        for (size_t ri = 0u; ri < sizeof(OUTER_BOOTSTRAP_ROWS) / sizeof(OUTER_BOOTSTRAP_ROWS[0]); ri++) {
+            uint8_t seen[256] = {0};
+            uint32_t support = 0u;
+            for (uint32_t lo = 0u; lo < 256u; lo++) {
+                uint8_t upper = (uint8_t)(((uint16_t)(peeled[ri][lo] - (uint16_t)low)) >> 8);
+                if (!seen[upper]) {
+                    seen[upper] = 1u;
+                    support++;
+                }
+            }
+            total_support += support;
+            if (total_support > best_support) break;
+        }
+        if (total_support < best_support) {
+            best_support = total_support;
+            low_count = 1u;
+        } else if (total_support == best_support) {
+            low_count++;
+        }
+    }
+    *out_best_support = best_support;
+    *out_low_count = low_count;
+}
+
+static void search_inward_candidate_ivs(const Options *opt,
+                                        KeyPair recovered_k8,
+                                        InwardWeakIVCandidate *beam,
+                                        size_t *beam_count)
+{
+    uint64_t rng = opt->search_seed ^ 0xA24BAED4963EE407ULL;
+    uint64_t total_trials = (uint64_t)opt->inward_trials * 8u;
+    uint64_t start_ms = now_ms();
+    *beam_count = 0u;
+    if (total_trials == 0u) total_trials = 1u;
+    for (uint64_t trial = 1u; trial <= total_trials; trial++) {
+        uint16_t iv_words[8];
+        uint32_t partial_support;
+        uint16_t low_count;
+        for (size_t i = 0u; i < 8u; i++) iv_words[i] = (uint16_t)(splitmix64(&rng) & 0xFFFFu);
+        inward_partial_low_selector_score(opt->key_words, iv_words, recovered_k8, &partial_support, &low_count);
+        inward_weak_iv_candidate_insert(beam, beam_count,
+                                        (size_t)((opt->inward_trials < 128u) ? opt->inward_trials : 128u),
+                                        iv_words, partial_support, low_count);
+        if (!g_debug_output) {
+            display_set_phase_progress("inward-sel", trial, total_trials);
+            display_set_current_iv_words(iv_words);
+            if (*beam_count > 0u) display_set_best_iv_words(beam[0].iv_words);
+        }
+        if ((trial % 8u) == 0u || trial == total_trials) {
+            double elapsed = (double)(now_ms() - start_ms) / 1000.0;
+            char best_hex[33];
+            if (*beam_count > 0u) format_iv_hex(beam[0].iv_words, best_hex);
+            else strcpy(best_hex, "--------------------------------");
+            if (g_debug_output || !g_live.console_output) {
+                printf("\r[inward-sel] %" PRIu64 "/%" PRIu64 " (%5.1f%%) best_support=%u best_ties=%u best_iv=%s elapsed=%6.1fs",
+                       trial, total_trials,
+                       (100.0 * (double)trial) / (double)total_trials,
+                       *beam_count > 0u ? beam[0].partial_support : 0u,
+                       *beam_count > 0u ? beam[0].low_count : 0u,
+                       best_hex, elapsed);
+                fflush(stdout);
+            }
+        }
+    }
+    if (g_debug_output || !g_live.console_output) putchar('\n');
+}
+
+static void refine_inward_candidates_exact(const Options *opt,
+                                           KeyPair recovered_k8,
+                                           const InwardWeakIVCandidate *input,
+                                           size_t input_count,
+                                           InwardProbeResult *beam,
+                                           size_t *beam_count,
+                                           size_t beam_cap)
+{
+    uint64_t start_ms = now_ms();
+    *beam_count = 0u;
+    for (size_t i = 0u; i < input_count; i++) {
+        InwardProbeResult cand;
+        probe_inward_selector_exact(opt, input[i].iv_words, recovered_k8, 4u, &cand);
+        inward_refine_insert(beam, beam_count, beam_cap, &cand);
+        if (!g_debug_output) {
+            display_set_phase_progress("inward-ref", i + 1u, input_count);
+            display_set_current_iv_words(input[i].iv_words);
+            if (*beam_count > 0u) display_set_best_iv_words(beam[0].iv_words);
+            display_set_depth((*beam_count > 0u) ? beam[0].deepest_stage : 8u);
+        }
+        if ((i % 4u) == 3u || i + 1u == input_count) {
+            double elapsed = (double)(now_ms() - start_ms) / 1000.0;
+            if (g_debug_output || !g_live.console_output) {
+                printf("\r[inward-ref] %zu/%zu (%5.1f%%) best_depth=%u best_ver=%u elapsed=%6.1fs",
+                       i + 1u, input_count,
+                       (100.0 * (double)(i + 1u)) / (double)input_count,
+                       *beam_count > 0u ? (unsigned)beam[0].deepest_stage : 8u,
+                       *beam_count > 0u ? beam[0].stage_verifier[beam[0].deepest_stage] : 0u,
+                       elapsed);
+                fflush(stdout);
+            }
+        }
+    }
+    if (g_debug_output || !g_live.console_output) putchar('\n');
+}
+
 static void subtract_translation_table(const uint16_t *source, uint16_t translation, uint16_t *dest)
 {
     for (uint32_t i = 0u; i < 0x10000u; i++) {
@@ -2412,6 +2545,90 @@ static void weak_iv_candidate_insert(WeakIVCandidate *beam,
     qsort(beam, beam_cap, sizeof(WeakIVCandidate), weak_iv_candidate_cmp);
 }
 
+static int inward_weak_iv_candidate_cmp(const void *lhs, const void *rhs)
+{
+    const InwardWeakIVCandidate *a = (const InwardWeakIVCandidate *)lhs;
+    const InwardWeakIVCandidate *b = (const InwardWeakIVCandidate *)rhs;
+    if (a->partial_support != b->partial_support) return (a->partial_support < b->partial_support) ? -1 : 1;
+    if (a->low_count != b->low_count) return (a->low_count < b->low_count) ? -1 : 1;
+    return memcmp(a->iv_words, b->iv_words, sizeof(a->iv_words));
+}
+
+static void inward_weak_iv_candidate_insert(InwardWeakIVCandidate *beam,
+                                            size_t *beam_count,
+                                            size_t beam_cap,
+                                            const uint16_t iv_words[8],
+                                            uint32_t partial_support,
+                                            uint16_t low_count)
+{
+    size_t i;
+    for (i = 0u; i < *beam_count; i++) {
+        if (memcmp(beam[i].iv_words, iv_words, 8u * sizeof(uint16_t)) == 0) {
+            if (partial_support < beam[i].partial_support ||
+                (partial_support == beam[i].partial_support && low_count < beam[i].low_count)) {
+                beam[i].partial_support = partial_support;
+                beam[i].low_count = low_count;
+            }
+            return;
+        }
+    }
+    if (*beam_count < beam_cap) {
+        memcpy(beam[*beam_count].iv_words, iv_words, 8u * sizeof(uint16_t));
+        beam[*beam_count].partial_support = partial_support;
+        beam[*beam_count].low_count = low_count;
+        (*beam_count)++;
+        qsort(beam, *beam_count, sizeof(InwardWeakIVCandidate), inward_weak_iv_candidate_cmp);
+        return;
+    }
+    if (beam_cap == 0u) return;
+    if (partial_support > beam[beam_cap - 1u].partial_support) return;
+    if (partial_support == beam[beam_cap - 1u].partial_support &&
+        low_count >= beam[beam_cap - 1u].low_count) return;
+    memcpy(beam[beam_cap - 1u].iv_words, iv_words, 8u * sizeof(uint16_t));
+    beam[beam_cap - 1u].partial_support = partial_support;
+    beam[beam_cap - 1u].low_count = low_count;
+    qsort(beam, beam_cap, sizeof(InwardWeakIVCandidate), inward_weak_iv_candidate_cmp);
+}
+
+static int inward_refine_cmp(const InwardProbeResult *a, const InwardProbeResult *b)
+{
+    if (a->deepest_stage != b->deepest_stage) return (a->deepest_stage < b->deepest_stage) ? -1 : 1;
+    for (uint8_t stage = a->deepest_stage; stage <= 7u; stage++) {
+        if (a->stage_verifier[stage] != b->stage_verifier[stage]) {
+            return (a->stage_verifier[stage] < b->stage_verifier[stage]) ? -1 : 1;
+        }
+    }
+    return memcmp(a->iv_words, b->iv_words, sizeof(a->iv_words));
+}
+
+static int inward_refine_cmp_qsort(const void *lhs, const void *rhs)
+{
+    return inward_refine_cmp((const InwardProbeResult *)lhs, (const InwardProbeResult *)rhs);
+}
+
+static void inward_refine_insert(InwardProbeResult *beam,
+                                 size_t *beam_count,
+                                 size_t beam_cap,
+                                 const InwardProbeResult *cand)
+{
+    size_t i;
+    for (i = 0u; i < *beam_count; i++) {
+        if (memcmp(beam[i].iv_words, cand->iv_words, sizeof(cand->iv_words)) != 0) continue;
+        if (inward_refine_cmp(cand, &beam[i]) < 0) beam[i] = *cand;
+        return;
+    }
+    if (*beam_count < beam_cap) {
+        beam[*beam_count] = *cand;
+        (*beam_count)++;
+        qsort(beam, *beam_count, sizeof(InwardProbeResult), inward_refine_cmp_qsort);
+        return;
+    }
+    if (beam_cap == 0u) return;
+    if (inward_refine_cmp(cand, &beam[beam_cap - 1u]) >= 0) return;
+    beam[beam_cap - 1u] = *cand;
+    qsort(beam, beam_cap, sizeof(InwardProbeResult), inward_refine_cmp_qsort);
+}
+
 static int k8_aggregate_cmp(const void *lhs, const void *rhs)
 {
     const K8AggregateScore *a = (const K8AggregateScore *)lhs;
@@ -2566,6 +2783,52 @@ static int recover_k8_hybrid_from_beam(const Options *opt,
     return 1;
 }
 
+static int probe_inward_selector_exact(const Options *opt,
+                                       const uint16_t iv_words[8],
+                                       KeyPair k8_pair,
+                                       uint8_t min_stage,
+                                       InwardProbeResult *out)
+{
+    FullContext ctx;
+    uint16_t *current = (uint16_t *)malloc(0x10000u * sizeof(uint16_t));
+    uint16_t *reduced = (uint16_t *)malloc(0x10000u * sizeof(uint16_t));
+    uint16_t *next = (uint16_t *)malloc(0x10000u * sizeof(uint16_t));
+    uint8_t deepest = 8u;
+    memset(out, 0, sizeof(*out));
+    memcpy(out->iv_words, iv_words, 8u * sizeof(uint16_t));
+    out->deepest_stage = 8u;
+    if (current == NULL || reduced == NULL || next == NULL) fatal("selector recursion allocation failed");
+    ctx = build_full_context(opt->key_words, iv_words, NULL, 0u);
+    out->pairs[8] = k8_pair;
+    peel_current_forward_stage_table_u16(ctx.table, k8_pair, 8u, current);
+    for (int stage = 7; stage >= (int)min_stage; stage--) {
+        OuterStageCandidate best;
+        if (!attacked_position_scan_exact(current, (uint8_t)stage, &best)) {
+            out->deepest_stage = deepest;
+            free_full_context(&ctx);
+            free(next);
+            free(reduced);
+            free(current);
+            return 0;
+        }
+        out->pairs[stage] = best.pair;
+        out->states[stage + 1u] = best.state_word;
+        out->stage_verifier[stage] = best.verifier_score;
+        if ((uint8_t)stage < deepest) deepest = (uint8_t)stage;
+        if (stage > (int)min_stage) {
+            subtract_translation_table(current, best.state_word, reduced);
+            peel_current_forward_stage_table_u16(reduced, best.pair, (uint8_t)stage, next);
+            memcpy(current, next, 0x10000u * sizeof(uint16_t));
+        }
+    }
+    out->deepest_stage = deepest;
+    free_full_context(&ctx);
+    free(next);
+    free(reduced);
+    free(current);
+    return deepest <= min_stage;
+}
+
 
 static int probe_full_inward_with_known_k8(const Options *opt,
                                            const uint16_t iv_words[8],
@@ -2717,12 +2980,26 @@ static int try_full_inward_iv(const Options *opt,
 static int run_full_attack_beam_hybrid(const Options *opt)
 {
     WeakIVCandidate *beam = (WeakIVCandidate *)calloc(opt->search_beam, sizeof(WeakIVCandidate));
+    InwardWeakIVCandidate *inward_weak_beam = NULL;
+    InwardProbeResult *inward_refine_beam = NULL;
+    size_t inward_weak_beam_count = 0u;
+    size_t inward_refine_beam_count = 0u;
+    size_t inward_weak_beam_cap = (size_t)((opt->inward_trials < 128u) ? opt->inward_trials : 128u);
+    size_t inward_refine_beam_cap = (size_t)((opt->inward_trials < 32u) ? opt->inward_trials : 32u);
     size_t beam_count = 0u;
     KeyPair recovered_k8;
     InwardProbeResult best;
     memset(&best, 0, sizeof(best));
     best.deepest_stage = 8u;
     if (beam == NULL) fatal("weak-IV beam allocation failed");
+    if (inward_weak_beam_cap != 0u) {
+        inward_weak_beam = (InwardWeakIVCandidate *)calloc(inward_weak_beam_cap, sizeof(InwardWeakIVCandidate));
+        if (inward_weak_beam == NULL) fatal("inward weak-IV beam allocation failed");
+    }
+    if (inward_refine_beam_cap != 0u) {
+        inward_refine_beam = (InwardProbeResult *)calloc(inward_refine_beam_cap, sizeof(InwardProbeResult));
+        if (inward_refine_beam == NULL) fatal("inward refine beam allocation failed");
+    }
     g_outer_workers = opt->workers;
     g_debug_output = opt->debug_output ? 1 : 0;
     ts_printf("searching weak IVs before full public attack");
@@ -2744,39 +3021,29 @@ static int run_full_attack_beam_hybrid(const Options *opt)
     for (size_t i = 0u; i < beam_count; i++) {
         if (memcmp(opt->iv_words, beam[i].iv_words, sizeof(opt->iv_words)) == 0) continue;
         if (try_full_inward_iv(opt, beam[i].iv_words, recovered_k8, &best, "beam inward attempt")) {
+            free(inward_refine_beam);
+            free(inward_weak_beam);
             free(beam);
             return 1;
         }
     }
-    {
-        uint64_t rng = opt->search_seed ^ 0x9E3779B97F4A7C15ULL;
-        uint64_t start_ms = now_ms();
-        for (uint32_t trial = 1u; trial <= opt->inward_trials; trial++) {
-            uint16_t iv_words[8];
-            char iv_hex[33];
-            for (size_t wi = 0u; wi < 8u; wi++) iv_words[wi] = (uint16_t)(splitmix64(&rng) & 0xFFFFu);
-            if ((trial % 8u) == 0u || trial == opt->inward_trials) {
-                double elapsed = (double)(now_ms() - start_ms) / 1000.0;
-                format_iv_hex(iv_words, iv_hex);
-                if (!g_debug_output) {
-                    display_set_phase_progress("inward-search", trial, opt->inward_trials);
-                    display_set_current_iv_words(iv_words);
-                }
-                if (g_debug_output || !g_live.console_output) {
-                    printf("\r[inward-search] %u/%u (%5.1f%%) current_iv=%s best_depth=%u elapsed=%6.1fs",
-                           trial, opt->inward_trials,
-                           (100.0 * (double)trial) / (double)opt->inward_trials,
-                           iv_hex, (unsigned)best.deepest_stage, elapsed);
-                    fflush(stdout);
-                }
-            }
-            if (try_full_inward_iv(opt, iv_words, recovered_k8, &best, "random inward attempt")) {
-                if (g_debug_output || !g_live.console_output) putchar('\n');
-                free(beam);
-                return 1;
-            }
+
+    search_inward_candidate_ivs(opt, recovered_k8, inward_weak_beam, &inward_weak_beam_count);
+    refine_inward_candidates_exact(opt, recovered_k8, inward_weak_beam, inward_weak_beam_count,
+                                   inward_refine_beam, &inward_refine_beam_count, inward_refine_beam_cap);
+    for (size_t i = 0u; i < inward_refine_beam_count; i++) {
+        if (memcmp(opt->iv_words, inward_refine_beam[i].iv_words, sizeof(opt->iv_words)) == 0) continue;
+        if (!g_debug_output) {
+            display_set_phase_progress("inward-beam", i + 1u, inward_refine_beam_count);
+            display_set_current_iv_words(inward_refine_beam[i].iv_words);
+            if (inward_refine_beam_count > 0u) display_set_best_iv_words(inward_refine_beam[0].iv_words);
         }
-        if (g_debug_output || !g_live.console_output) putchar('\n');
+        if (try_full_inward_iv(opt, inward_refine_beam[i].iv_words, recovered_k8, &best, "selected inward attempt")) {
+            free(inward_refine_beam);
+            free(inward_weak_beam);
+            free(beam);
+            return 1;
+        }
     }
     if (best.deepest_stage < 8u) {
         char best_iv_hex[33];
@@ -2791,6 +3058,8 @@ static int run_full_attack_beam_hybrid(const Options *opt)
                   best.pairs[3].k0, best.pairs[3].k1,
                   best.pairs[2].k0, best.pairs[2].k1);
     }
+    free(inward_refine_beam);
+    free(inward_weak_beam);
     free(beam);
     return 0;
 }
