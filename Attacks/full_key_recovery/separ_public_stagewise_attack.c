@@ -1,5 +1,5 @@
 #define main separ_public_full_hybrid_attack_main
-#include "separ_public_full_hybrid_attack.c"
+#include "quotient/separ_public_full_hybrid_attack.c"
 #undef main
 
 typedef struct {

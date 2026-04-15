@@ -28,7 +28,7 @@
 \maketitle
 
 \begin{abstract}
-We study the concrete SEPAR implementation in \texttt{SEPAR/main.c}, not an abstract idealized design. In the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model, we give a public end-to-end full-key recovery attack on the 256-bit implementation key. The attack has a stochastic front-end and a deterministic exact core. The stochastic component is a chosen-IV search for suitable stage-8 and inward contexts. Once those IV sets are hit, every subsequent step is exact: an exact public stage-8 bootstrap for $K_8$; an exact stagewise inward search in which already-solved outer stages are peeled on fresh IVs by exact fixed-pair state recovery; and an exact stage-1 closure from the public stage-2 reduced table. Final acceptance is exact: a 256-bit key is accepted if and only if it reproduces the full $2^{16}$-entry one-word oracle table on the successful IV. We define the exact attack primitives used by the implementation, prove conditional exactness, report complete recovery on difficult random keys, and give a full-program Monte Carlo over 32 pseudorandom 256-bit keys. In that experiment, the implemented attack succeeded on all 32 keys at inward budget $64$ per stage, i.e.\ with total chosen-IV budget $512+32+6\cdot 64=928$ IV contexts.
+We study the concrete SEPAR implementation in \texttt{SEPAR/main.c}, not an abstract idealized design. In the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model, we give a public end-to-end full-key recovery attack on the 256-bit implementation key. The attack has a stochastic front-end and a deterministic exact core. The stochastic component is a chosen-IV search for suitable stage-8 and inward contexts. Once those IV sets are hit, every subsequent step is exact: an exact public stage-8 bootstrap for $K_8$; an exact stagewise inward search in which already-solved outer stages are peeled on fresh IVs by exact fixed-pair state recovery; and an exact stage-1 closure from the public stage-2 reduced table. Final acceptance is exact: a 256-bit key is accepted if and only if it reproduces the full $2^{16}$-entry one-word oracle table on the successful IV. We define the exact attack primitives used by the implementation, prove conditional exactness, report complete recovery on difficult random keys, and give a full-program Monte Carlo over 100 pseudorandom 256-bit keys. In that experiment, the implemented attack succeeded on all 100 keys at inward budget $64$ per stage, i.e.\ with total chosen-IV budget $512+32+6\cdot 64=928$ IV contexts.
 \end{abstract}
 
 \section{Introduction}
@@ -728,7 +728,7 @@ from \texttt{stagewise\_attack\_hard1\_default64.log}.
 \subsection{Experiment design}
 This Monte Carlo evaluates the entire implemented attack, not a conditional inward probe. We sampled
 \[
-m=32
+m=100
 \]
 independent pseudorandom 256-bit keys by
 \[
@@ -749,11 +749,11 @@ N\in\{64,128,256\}.
 \]
 Because of Proposition~\ref{prop:monotone-budget}, success is monotone in $N$. Accordingly, once a key succeeded at $N=64$, the larger-budget rows were recorded as monotone skips. The raw data are logged in
 \[
-\texttt{monte\_carlo\_stagewise.log}.
+\texttt{monte\_carlo\_stagewise\_100.log}.
 \]
 
 \subsection{Observed success rates}
-For each tested budget, the attack succeeded on all 32 sampled keys. Let
+For each tested budget, the attack succeeded on all 100 sampled keys. Let
 \[
 P_N:=\Pr[\text{full public attack succeeds on a random key at inward budget }N]
 \]
@@ -763,13 +763,18 @@ under the fixed outer parameters
 \]
 For 32 successes in 32 trials, the exact two-sided Clopper--Pearson 95\% lower confidence limit is
 \[
-\underline{P}_{95}(32/32)=0.891118839\ldots
+\underline{P}_{95}(100/100)=0.963783307\ldots
 \]
 hence
 \[
-P_N\ge 0.8911
+P_N\ge 0.9638
 \]
 at confidence level 95\% for every tested budget $N\in\{64,128,256\}$.
+Equivalently, the observed 100\% success rate carries a one-sided 95\% statistical error bar of
+\[
+1-0.963783307\approx 0.036216693,
+\]
+that is, about $3.62$ percentage points.
 
 The measured success table is:
 \begin{center}
@@ -778,14 +783,14 @@ The measured success table is:
 \toprule
 Budget $N$ per stage & Total IV contexts & Chosen encryptions & Successes & 95\% lower bound \\
 \midrule
-64    & $512+32+6\cdot 64=928$   & $60{,}817{,}408$  & $32/32$ & $0.8911$ \\
-128   & $512+32+6\cdot 128=1312$ & $85{,}983{,}232$  & $32/32$ & $0.8911$ \\
-256   & $512+32+6\cdot 256=2080$ & $136{,}314{,}880$ & $32/32$ & $0.8911$ \\
+64    & $512+32+6\cdot 64=928$   & $60{,}817{,}408$  & $100/100$ & $0.9638$ \\
+128   & $512+32+6\cdot 128=1312$ & $85{,}983{,}232$  & $100/100$ & $0.9638$ \\
+256   & $512+32+6\cdot 256=2080$ & $136{,}314{,}880$ & $100/100$ & $0.9638$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Because the budget-64 run already succeeded on all 32 keys, the larger-budget rows do not add new observed failures; they certify that success remained perfect when the inward budget was increased.
+Because the budget-64 run already succeeded on all 100 keys, the larger-budget rows do not add new observed failures; they certify that success remained perfect when the inward budget was increased.
 
 \subsection{Runtime on the Monte Carlo sample}
 For the 32 full successes at budget $N=64$, the measured wall-clock times on the user's machine were:
@@ -794,10 +799,10 @@ For the 32 full successes at budget $N=64$, the measured wall-clock times on the
 \toprule
 Statistic & Seconds \\
 \midrule
-mean   & $104.805$ \\
-median & $103.049$ \\
+mean   & $105.041$ \\
+median & $104.691$ \\
 min    & $60.717$ \\
-max    & $156.716$ \\
+max    & $178.191$ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -880,7 +885,7 @@ For fixed budgets $(N_{\mathrm{out}},B,N)$, the exact implemented query bound is
 \[
 60{,}817{,}408.
 \]
-Empirically, on the user's machine, the 32-key Monte Carlo at the default budget $N=64$ averaged $104.805$ seconds per full key recovery, with median $103.049$ seconds and worst case $156.716$ seconds.
+Empirically, on the user's machine, the 100-key Monte Carlo at the default budget $N=64$ averaged $105.041$ seconds per full key recovery, with median $104.691$ seconds and worst case $178.191$ seconds.
 
 \section{Implementation and runtime}
 The attack is implemented in the multithreaded C program
@@ -911,7 +916,7 @@ These are exactly the parameters used in the full-program Monte Carlo of Section
 \section{Conclusion}
 The \texttt{main.c} implementation of SEPAR is broken end-to-end in the chosen-IV, chosen-plaintext, chosen-ciphertext, reset model. The decisive structural fact is that every stage is exposed through an exact translated $2^{16}$-point permutation, and once a suffix stage key is fixed the corresponding IV-local state word can itself be recovered exactly and peeled away on fresh IVs. This yields the stagewise recursion of Section~5 and removes the dependence on one exceptionally good inward IV.
 
-The attack is therefore not a heuristic key-ranking experiment. Conditional on the sampled IV sets containing the true exact candidates, the recovery is deterministic and exact; false full keys are excluded by complete one-word table equality. On a 32-key Monte Carlo sample of the full program, the default parameter set succeeded on all keys, giving a 95\% exact lower confidence bound of $0.8911$ on the random-key success probability at the tested budget.
+The attack is therefore not a heuristic key-ranking experiment. Conditional on the sampled IV sets containing the true exact candidates, the recovery is deterministic and exact; false full keys are excluded by complete one-word table equality. On a 100-key Monte Carlo sample of the full program, the default parameter set succeeded on all keys, giving a 95\% exact lower confidence bound of $0.9638$ on the random-key success probability at the tested budget.
 
 
 \end{document}
