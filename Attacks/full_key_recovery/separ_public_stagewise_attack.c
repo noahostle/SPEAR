@@ -225,14 +225,17 @@ typedef struct {
 typedef struct {
     int compact_enabled;
     int console_output;
+    int vt_output;
     int initialized;
     HANDLE handle;
     COORD top;
+    uint64_t last_render_ms;
+    DWORD console_mode_orig;
+    unsigned rendered_lines;
     char phase[32];
     char progress[24];
     char best_iv[33];
     char keys[9][16];
-    char states[9][8];
 } LiveDisplay;
 
 static LiveDisplay g_live;
@@ -280,11 +283,6 @@ static void display_set_unknown(char *buf, size_t len)
     snprintf(buf, len, ".... ....");
 }
 
-static void display_set_zero_state(char *buf, size_t len)
-{
-    snprintf(buf, len, "0000");
-}
-
 static void display_format_pair(char *buf, size_t len, KeyPair pair)
 {
     snprintf(buf, len, "%04X %04X", pair.k0, pair.k1);
@@ -297,7 +295,6 @@ static void display_reset_values(void)
     snprintf(g_live.best_iv, sizeof(g_live.best_iv), "--------------------------------");
     for (uint8_t i = 1u; i <= 8u; i++) {
         display_set_unknown(g_live.keys[i], sizeof(g_live.keys[i]));
-        display_set_zero_state(g_live.states[i], sizeof(g_live.states[i]));
     }
 }
 
@@ -348,14 +345,20 @@ static void display_init(int debug_output)
     g_live.handle = GetStdHandle(STD_OUTPUT_HANDLE);
     g_live.console_output = (g_live.handle != INVALID_HANDLE_VALUE && g_live.handle != NULL &&
                              GetConsoleMode(g_live.handle, &mode) != 0);
+    if (g_live.console_output) {
+        DWORD vt_mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        g_live.console_mode_orig = mode;
+        g_live.vt_output = (SetConsoleMode(g_live.handle, vt_mode) != 0);
+    }
     display_reset_values();
 }
 
 static void display_render(void)
 {
-    char lines[20][256];
+    char lines[12][256];
     char phase[32];
     const int width = 96;
+    unsigned line_count = 12u;
     if (!g_live.compact_enabled || !g_live.console_output) return;
     display_format_phase(g_live.phase, phase, sizeof(phase));
     snprintf(lines[0], sizeof(lines[0]), "[+] Phase : %-10s Progress : %-10s Best IV : %s", phase, g_live.progress, g_live.best_iv);
@@ -363,21 +366,27 @@ static void display_render(void)
     snprintf(lines[2], sizeof(lines[2]), "[!] Recovered Keybits :");
     lines[3][0] = '\0';
     snprintf(lines[4], sizeof(lines[4]), "\t[K8] %s", g_live.keys[8]);
-    snprintf(lines[5], sizeof(lines[5]), "\t[s8] %s", g_live.states[8]);
-    snprintf(lines[6], sizeof(lines[6]), "\t[K7] %s", g_live.keys[7]);
-    snprintf(lines[7], sizeof(lines[7]), "\t[s7] %s", g_live.states[7]);
-    snprintf(lines[8], sizeof(lines[8]), "\t[K6] %s", g_live.keys[6]);
-    snprintf(lines[9], sizeof(lines[9]), "\t[s6] %s", g_live.states[6]);
-    snprintf(lines[10], sizeof(lines[10]), "\t[K5] %s", g_live.keys[5]);
-    snprintf(lines[11], sizeof(lines[11]), "\t[s5] %s", g_live.states[5]);
-    snprintf(lines[12], sizeof(lines[12]), "\t[K4] %s", g_live.keys[4]);
-    snprintf(lines[13], sizeof(lines[13]), "\t[s4] %s", g_live.states[4]);
-    snprintf(lines[14], sizeof(lines[14]), "\t[K3] %s", g_live.keys[3]);
-    snprintf(lines[15], sizeof(lines[15]), "\t[s3] %s", g_live.states[3]);
-    snprintf(lines[16], sizeof(lines[16]), "\t[K2] %s", g_live.keys[2]);
-    snprintf(lines[17], sizeof(lines[17]), "\t[s2] %s", g_live.states[2]);
-    snprintf(lines[18], sizeof(lines[18]), "\t[K1] %s", g_live.keys[1]);
-    snprintf(lines[19], sizeof(lines[19]), "\t[s1] %s", g_live.states[1]);
+    snprintf(lines[5], sizeof(lines[5]), "\t[K7] %s", g_live.keys[7]);
+    snprintf(lines[6], sizeof(lines[6]), "\t[K6] %s", g_live.keys[6]);
+    snprintf(lines[7], sizeof(lines[7]), "\t[K5] %s", g_live.keys[5]);
+    snprintf(lines[8], sizeof(lines[8]), "\t[K4] %s", g_live.keys[4]);
+    snprintf(lines[9], sizeof(lines[9]), "\t[K3] %s", g_live.keys[3]);
+    snprintf(lines[10], sizeof(lines[10]), "\t[K2] %s", g_live.keys[2]);
+    snprintf(lines[11], sizeof(lines[11]), "\t[K1] %s", g_live.keys[1]);
+    if (g_live.vt_output) {
+        if (!g_live.initialized) {
+            printf("\x1b[?25l");
+            g_live.initialized = 1;
+        } else if (g_live.rendered_lines != 0u) {
+            printf("\x1b[%uF", g_live.rendered_lines);
+        }
+        for (unsigned i = 0u; i < line_count; i++) {
+            printf("\x1b[2K%-*s\n", width, lines[i]);
+        }
+        fflush(stdout);
+        g_live.rendered_lines = line_count;
+        return;
+    }
     if (!g_live.initialized) {
         CONSOLE_SCREEN_BUFFER_INFO info;
         if (GetConsoleScreenBufferInfo(g_live.handle, &info)) {
@@ -386,26 +395,47 @@ static void display_render(void)
             g_live.top.X = 0;
             g_live.top.Y = 0;
         }
-        for (size_t i = 0u; i < 20u; i++) {
-            printf("%-*s%s", width, lines[i], (i + 1u == 20u) ? "" : "\n");
+        for (unsigned i = 0u; i < line_count; i++) {
+            printf("%-*s%s", width, lines[i], (i + 1u == line_count) ? "" : "\n");
         }
         fflush(stdout);
         g_live.initialized = 1;
+        g_live.rendered_lines = line_count;
         return;
     }
     SetConsoleCursorPosition(g_live.handle, g_live.top);
-    for (size_t i = 0u; i < 20u; i++) {
-        printf("%-*s%s", width, lines[i], (i + 1u == 20u) ? "" : "\n");
+    for (unsigned i = 0u; i < line_count; i++) {
+        printf("%-*s%s", width, lines[i], (i + 1u == line_count) ? "" : "\n");
     }
     fflush(stdout);
+    g_live.rendered_lines = line_count;
+}
+
+static void display_render_maybe(int force)
+{
+    uint64_t now;
+    if (!g_live.compact_enabled) return;
+    if (!g_live.console_output) return;
+    now = now_ms();
+    if (!force && g_live.last_render_ms != 0u && now - g_live.last_render_ms < 125u) return;
+    g_live.last_render_ms = now;
+    display_render();
 }
 
 static void display_finish(void)
 {
     COORD end;
     if (!g_live.compact_enabled || !g_live.console_output || !g_live.initialized) return;
+    if (g_live.vt_output) {
+        if (g_live.console_mode_orig != 0u) {
+            SetConsoleMode(g_live.handle, g_live.console_mode_orig);
+        }
+        printf("\x1b[?25h");
+        fflush(stdout);
+        return;
+    }
     end.X = 0;
-    end.Y = (SHORT)(g_live.top.Y + 20);
+    end.Y = (SHORT)(g_live.top.Y + (SHORT)g_live.rendered_lines);
     SetConsoleCursorPosition(g_live.handle, end);
 }
 
@@ -415,26 +445,24 @@ static void display_set_phase_progress(const char *phase, uint64_t done, uint64_
     snprintf(g_live.phase, sizeof(g_live.phase), "%s", phase);
     if (total == 0u) snprintf(g_live.progress, sizeof(g_live.progress), "-");
     else snprintf(g_live.progress, sizeof(g_live.progress), "%" PRIu64 "/%" PRIu64, done, total);
-    display_render();
+    display_render_maybe(done == total);
 }
 
 static void display_set_k8(KeyPair pair)
 {
     if (!g_live.compact_enabled) return;
     display_format_pair(g_live.keys[8], sizeof(g_live.keys[8]), pair);
-    display_render();
+    display_render_maybe(1);
 }
 
 static void display_commit_stage(uint8_t stage, KeyPair pair, uint16_t state_word)
 {
+    (void)state_word;
     if (!g_live.compact_enabled) return;
     if (stage >= 1u && stage <= 8u) {
         display_format_pair(g_live.keys[stage], sizeof(g_live.keys[stage]), pair);
     }
-    if (stage + 1u <= 8u) {
-        snprintf(g_live.states[stage + 1u], sizeof(g_live.states[stage + 1u]), "%04X", state_word);
-    }
-    display_render();
+    display_render_maybe(1);
 }
 
 static void display_set_current_iv_words(const uint16_t iv_words[8])
@@ -444,18 +472,21 @@ static void display_set_current_iv_words(const uint16_t iv_words[8])
 
 static void display_set_best_iv_words(const uint16_t iv_words[8])
 {
+    char next[33];
     if (!g_live.compact_enabled) return;
-    format_iv_hex(iv_words, g_live.best_iv);
-    display_render();
+    format_iv_hex(iv_words, next);
+    if (strcmp(next, g_live.best_iv) == 0) return;
+    snprintf(g_live.best_iv, sizeof(g_live.best_iv), "%s", next);
+    display_render_maybe(1);
 }
 
 static void display_commit_stage1(KeyPair pair, uint16_t s2, uint16_t s1)
 {
+    (void)s2;
+    (void)s1;
     if (!g_live.compact_enabled) return;
     display_format_pair(g_live.keys[1], sizeof(g_live.keys[1]), pair);
-    snprintf(g_live.states[2], sizeof(g_live.states[2]), "%04X", s2);
-    snprintf(g_live.states[1], sizeof(g_live.states[1]), "%04X", s1);
-    display_render();
+    display_render_maybe(1);
 }
 
 static void display_mark_done(void)
@@ -463,7 +494,7 @@ static void display_mark_done(void)
     if (!g_live.compact_enabled) return;
     snprintf(g_live.phase, sizeof(g_live.phase), "done");
     snprintf(g_live.progress, sizeof(g_live.progress), "-");
-    display_render();
+    display_render_maybe(1);
 }
 
 static void compact_milestone_printf(const char *fmt, ...)
@@ -2060,17 +2091,17 @@ static void print_full_recovery_summary(const InwardProbeResult *result)
         display_finish();
         if (g_live.console_output) putchar('\n');
         plain_printf("full public attack succeeded on iv=%s", iv_hex);
-        plain_printf("K8=(%04X,%04X) K7=(%04X,%04X) s8=%04X K6=(%04X,%04X) s7=%04X",
+        plain_printf("K8=(%04X,%04X) K7=(%04X,%04X) K6=(%04X,%04X)",
                      result->pairs[8].k0, result->pairs[8].k1,
-                     result->pairs[7].k0, result->pairs[7].k1, result->states[8],
-                     result->pairs[6].k0, result->pairs[6].k1, result->states[7]);
-        plain_printf("K5=(%04X,%04X) s6=%04X K4=(%04X,%04X) s5=%04X K3=(%04X,%04X) s4=%04X",
-                     result->pairs[5].k0, result->pairs[5].k1, result->states[6],
-                     result->pairs[4].k0, result->pairs[4].k1, result->states[5],
-                     result->pairs[3].k0, result->pairs[3].k1, result->states[4]);
-        plain_printf("K2=(%04X,%04X) s3=%04X K1=(%04X,%04X) s2=%04X s1=%04X",
-                     result->pairs[2].k0, result->pairs[2].k1, result->states[3],
-                     result->pairs[1].k0, result->pairs[1].k1, result->states[2], result->states[1]);
+                     result->pairs[7].k0, result->pairs[7].k1,
+                     result->pairs[6].k0, result->pairs[6].k1);
+        plain_printf("K5=(%04X,%04X) K4=(%04X,%04X) K3=(%04X,%04X)",
+                     result->pairs[5].k0, result->pairs[5].k1,
+                     result->pairs[4].k0, result->pairs[4].k1,
+                     result->pairs[3].k0, result->pairs[3].k1);
+        plain_printf("K2=(%04X,%04X) K1=(%04X,%04X)",
+                     result->pairs[2].k0, result->pairs[2].k1,
+                     result->pairs[1].k0, result->pairs[1].k1);
     }
 }
 
