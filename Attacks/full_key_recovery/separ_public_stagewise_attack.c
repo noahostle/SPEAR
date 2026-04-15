@@ -229,8 +229,8 @@ typedef struct {
     int initialized;
     HANDLE handle;
     COORD top;
-    uint64_t last_render_ms;
     DWORD console_mode_orig;
+    unsigned line_width;
     unsigned rendered_lines;
     char phase[32];
     char progress[24];
@@ -338,6 +338,7 @@ static void display_format_phase(const char *phase, char *out, size_t out_len)
 static void display_init(int debug_output)
 {
     DWORD mode;
+    CONSOLE_SCREEN_BUFFER_INFO info;
     memset(&g_live, 0, sizeof(g_live));
     g_debug_output = debug_output ? 1 : 0;
     g_live.compact_enabled = g_debug_output ? 0 : 1;
@@ -349,30 +350,35 @@ static void display_init(int debug_output)
         DWORD vt_mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
         g_live.console_mode_orig = mode;
         g_live.vt_output = (SetConsoleMode(g_live.handle, vt_mode) != 0);
+        if (GetConsoleScreenBufferInfo(g_live.handle, &info)) {
+            SHORT cols = (SHORT)(info.srWindow.Right - info.srWindow.Left + 1);
+            g_live.line_width = (cols > 8) ? (unsigned)(cols - 1) : 96u;
+        } else {
+            g_live.line_width = 96u;
+        }
     }
+    if (g_live.line_width == 0u) g_live.line_width = 96u;
     display_reset_values();
 }
 
 static void display_render(void)
 {
-    char lines[12][256];
+    char lines[10][256];
     char phase[32];
-    const int width = 96;
-    unsigned line_count = 12u;
+    const unsigned width = g_live.line_width;
+    unsigned line_count = 10u;
     if (!g_live.compact_enabled || !g_live.console_output) return;
     display_format_phase(g_live.phase, phase, sizeof(phase));
     snprintf(lines[0], sizeof(lines[0]), "[+] Phase : %-10s Progress : %-10s Best IV : %s", phase, g_live.progress, g_live.best_iv);
-    lines[1][0] = '\0';
-    snprintf(lines[2], sizeof(lines[2]), "[!] Recovered Keybits :");
-    lines[3][0] = '\0';
-    snprintf(lines[4], sizeof(lines[4]), "\t[K8] %s", g_live.keys[8]);
-    snprintf(lines[5], sizeof(lines[5]), "\t[K7] %s", g_live.keys[7]);
-    snprintf(lines[6], sizeof(lines[6]), "\t[K6] %s", g_live.keys[6]);
-    snprintf(lines[7], sizeof(lines[7]), "\t[K5] %s", g_live.keys[5]);
-    snprintf(lines[8], sizeof(lines[8]), "\t[K4] %s", g_live.keys[4]);
-    snprintf(lines[9], sizeof(lines[9]), "\t[K3] %s", g_live.keys[3]);
-    snprintf(lines[10], sizeof(lines[10]), "\t[K2] %s", g_live.keys[2]);
-    snprintf(lines[11], sizeof(lines[11]), "\t[K1] %s", g_live.keys[1]);
+    snprintf(lines[1], sizeof(lines[1]), "[!] Recovered Keybits :");
+    snprintf(lines[2], sizeof(lines[2]), "    [K8] %s", g_live.keys[8]);
+    snprintf(lines[3], sizeof(lines[3]), "    [K7] %s", g_live.keys[7]);
+    snprintf(lines[4], sizeof(lines[4]), "    [K6] %s", g_live.keys[6]);
+    snprintf(lines[5], sizeof(lines[5]), "    [K5] %s", g_live.keys[5]);
+    snprintf(lines[6], sizeof(lines[6]), "    [K4] %s", g_live.keys[4]);
+    snprintf(lines[7], sizeof(lines[7]), "    [K3] %s", g_live.keys[3]);
+    snprintf(lines[8], sizeof(lines[8]), "    [K2] %s", g_live.keys[2]);
+    snprintf(lines[9], sizeof(lines[9]), "    [K1] %s", g_live.keys[1]);
     if (g_live.vt_output) {
         if (!g_live.initialized) {
             printf("\x1b[?25l");
@@ -381,7 +387,7 @@ static void display_render(void)
             printf("\x1b[%uF", g_live.rendered_lines);
         }
         for (unsigned i = 0u; i < line_count; i++) {
-            printf("\x1b[2K%-*s\n", width, lines[i]);
+            printf("\x1b[2K%-*.*s\n", (int)width, (int)width, lines[i]);
         }
         fflush(stdout);
         g_live.rendered_lines = line_count;
@@ -396,7 +402,7 @@ static void display_render(void)
             g_live.top.Y = 0;
         }
         for (unsigned i = 0u; i < line_count; i++) {
-            printf("%-*s%s", width, lines[i], (i + 1u == line_count) ? "" : "\n");
+            printf("%-*.*s%s", (int)width, (int)width, lines[i], (i + 1u == line_count) ? "" : "\n");
         }
         fflush(stdout);
         g_live.initialized = 1;
@@ -405,21 +411,10 @@ static void display_render(void)
     }
     SetConsoleCursorPosition(g_live.handle, g_live.top);
     for (unsigned i = 0u; i < line_count; i++) {
-        printf("%-*s%s", width, lines[i], (i + 1u == line_count) ? "" : "\n");
+        printf("%-*.*s%s", (int)width, (int)width, lines[i], (i + 1u == line_count) ? "" : "\n");
     }
     fflush(stdout);
     g_live.rendered_lines = line_count;
-}
-
-static void display_render_maybe(int force)
-{
-    uint64_t now;
-    if (!g_live.compact_enabled) return;
-    if (!g_live.console_output) return;
-    now = now_ms();
-    if (!force && g_live.last_render_ms != 0u && now - g_live.last_render_ms < 125u) return;
-    g_live.last_render_ms = now;
-    display_render();
 }
 
 static void display_finish(void)
@@ -445,14 +440,14 @@ static void display_set_phase_progress(const char *phase, uint64_t done, uint64_
     snprintf(g_live.phase, sizeof(g_live.phase), "%s", phase);
     if (total == 0u) snprintf(g_live.progress, sizeof(g_live.progress), "-");
     else snprintf(g_live.progress, sizeof(g_live.progress), "%" PRIu64 "/%" PRIu64, done, total);
-    display_render_maybe(done == total);
+    display_render();
 }
 
 static void display_set_k8(KeyPair pair)
 {
     if (!g_live.compact_enabled) return;
     display_format_pair(g_live.keys[8], sizeof(g_live.keys[8]), pair);
-    display_render_maybe(1);
+    display_render();
 }
 
 static void display_commit_stage(uint8_t stage, KeyPair pair, uint16_t state_word)
@@ -462,7 +457,7 @@ static void display_commit_stage(uint8_t stage, KeyPair pair, uint16_t state_wor
     if (stage >= 1u && stage <= 8u) {
         display_format_pair(g_live.keys[stage], sizeof(g_live.keys[stage]), pair);
     }
-    display_render_maybe(1);
+    display_render();
 }
 
 static void display_set_current_iv_words(const uint16_t iv_words[8])
@@ -477,7 +472,7 @@ static void display_set_best_iv_words(const uint16_t iv_words[8])
     format_iv_hex(iv_words, next);
     if (strcmp(next, g_live.best_iv) == 0) return;
     snprintf(g_live.best_iv, sizeof(g_live.best_iv), "%s", next);
-    display_render_maybe(1);
+    display_render();
 }
 
 static void display_commit_stage1(KeyPair pair, uint16_t s2, uint16_t s1)
@@ -486,7 +481,7 @@ static void display_commit_stage1(KeyPair pair, uint16_t s2, uint16_t s1)
     (void)s1;
     if (!g_live.compact_enabled) return;
     display_format_pair(g_live.keys[1], sizeof(g_live.keys[1]), pair);
-    display_render_maybe(1);
+    display_render();
 }
 
 static void display_mark_done(void)
@@ -494,7 +489,7 @@ static void display_mark_done(void)
     if (!g_live.compact_enabled) return;
     snprintf(g_live.phase, sizeof(g_live.phase), "done");
     snprintf(g_live.progress, sizeof(g_live.progress), "-");
-    display_render_maybe(1);
+    display_render();
 }
 
 static void compact_milestone_printf(const char *fmt, ...)
@@ -767,10 +762,6 @@ static const RepTable *get_rep_table(uint8_t stage, int canonicalize)
                 printf("\r[stage%u-reps] %" PRIu64 "/%" PRIu64 " (%5.1f%%) elapsed=%6.1fs",
                        (unsigned)stage, done, total_masks, pct, elapsed);
                 fflush(stdout);
-            } else {
-                char phase[16];
-                snprintf(phase, sizeof(phase), "stage%u-reps", (unsigned)stage);
-                display_set_phase_progress(phase, done, total_masks);
             }
             if (wait == WAIT_OBJECT_0) break;
             if (wait != WAIT_TIMEOUT) fatal("stage %u rep WaitForMultipleObjects failed", (unsigned)stage);
@@ -779,10 +770,6 @@ static const RepTable *get_rep_table(uint8_t stage, int canonicalize)
         if (g_debug_output) {
             printf("\r[stage%u-reps] %" PRIu64 "/%" PRIu64 " (%5.1f%%) complete%29s\n",
                    (unsigned)stage, (uint64_t)atomic_load(&progress), total_masks, 100.0, "");
-        } else {
-            char phase[16];
-            snprintf(phase, sizeof(phase), "stage%u-reps", (unsigned)stage);
-            display_set_phase_progress(phase, total_masks, total_masks);
         }
         for (unsigned i = 0u; i < workers; i++) CloseHandle(handles[i]);
         free(worker);
@@ -907,10 +894,6 @@ static uint64_t *exact_max_projected_cycles(const uint16_t *outputs,
                 printf("\r[stage%u-cycles] %" PRIu64 "/%" PRIu64 " (%5.1f%%) elapsed=%6.1fs best=%u ties=%zu",
                        (unsigned)stage, done, total, pct, elapsed, running_best, running_ties);
                 fflush(stdout);
-            } else {
-                char phase[16];
-                snprintf(phase, sizeof(phase), "stage%u-cycles", (unsigned)stage);
-                display_set_phase_progress(phase, done, total);
             }
             if (wait == WAIT_OBJECT_0) break;
             if (wait != WAIT_TIMEOUT) fatal("stage %u cycle WaitForMultipleObjects failed", (unsigned)stage);
@@ -940,10 +923,6 @@ static uint64_t *exact_max_projected_cycles(const uint16_t *outputs,
         if (g_debug_output) {
             printf("\r[stage%u-cycles] %" PRIu64 "/%" PRIu64 " (%5.1f%%) complete best=%u ties=%zu%8s\n",
                    (unsigned)stage, (uint64_t)atomic_load(&progress), total, 100.0, best, count, "");
-        } else {
-            char phase[16];
-            snprintf(phase, sizeof(phase), "stage%u-cycles", (unsigned)stage);
-            display_set_phase_progress(phase, total, total);
         }
         for (unsigned i = 0u; i < workers; i++) {
             CloseHandle(handles[i]);
@@ -1484,8 +1463,6 @@ static BootstrapCandidate *run_stage8_bootstrap_exact(const FullContext *ctx_a,
                     if (g_debug_output) {
                         printf("\r[stage8-rot] %" PRIu64 "/%" PRIu64 " (%5.1f%%) candidates=%zu", index, total, pct, row_count);
                         fflush(stdout);
-                    } else {
-                        display_set_phase_progress("stage8-rot", index, total);
                     }
                 }
                 if (!reconstruct_order_from_outputs_u16(ctx_a->table, rotated, DEFAULT_DIFFS, sizeof(DEFAULT_DIFFS) / sizeof(DEFAULT_DIFFS[0]), order)) continue;
