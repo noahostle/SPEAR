@@ -37,11 +37,11 @@ Date: & May 2026 \\
 
 \subsection{Project motivation}
 
-The Internet of Things has changed the practical setting in which symmetric cryptography is expected to operate. Many contemporary systems contain sensors, RFID-like devices, smart locks, medical monitors, industrial controllers, small wireless nodes, and other embedded components that process sensitive data while operating under strict limits on memory, gate count, clock speed, energy, and latency. These devices may be inexpensive and physically constrained, but the information they protect is not necessarily low value. A networked card reader in a government building, a wireless actuator in an industrial facility, or a medical telemetry component in a hospital can create serious security consequences with severe real world implications if its cryptography fails. The design problem is therefore not simply to make encryption fast. It is to preserve a meaningful security margin while making the algorithm implementable on hardware and software platforms that cannot afford the cost profile of conventional general-purpose primitives such as AES.\\
+The Internet of Things has changed the practical setting in which symmetric cryptography is expected to operate. Many contemporary systems contain sensors, RFID devices, smart locks, medical monitors, industrial controllers, small wireless nodes, and other embedded components that process sensitive data while operating under strict limits on memory, gate count, clock speed, energy, and latency. These devices may be inexpensive and physically constrained, but the information they protect is not necessarily low value. A networked card reader in a government building, a wireless actuator in an industrial facility, or a medical telemetry component in a hospital can create serious security consequences with severe real world implications if its cryptography fails. The design problem is therefore not simply to make encryption fast. It is to preserve a meaningful security margin while making the algorithm implementable on hardware and software platforms that cannot afford the cost profile of conventional general purpose primitives such as AES.\\
 
 Lightweight cryptography exists to address this tension. It usually obtains efficiency by simplifying one or more parts of a design: using small S-boxes, small blocks, simple linear layers, reduced memory, compact key schedules, or repeated low cost round functions. None of these choices is automatically insecure. In fact, well designed lightweight ciphers can be strong precisely because their designers understand the cost of every component and compensate for each simplification elsewhere. The risk is that a construction may appear to have a large key size or pass ordinary statistical tests while still containing exploitable structure at the level of its specific construction. The cryptanalyt's task is to determine whether the efficiency choices form a coherent design or whether they expose a shortcut resultant from one (or an unlucky combination) of its efficient design factors.\\
 
-SEPAR is a proposed lightweight hybrid encryption algorithm for IoT environments \cite{VahiJassbi2020}. It is presented as combining stream cipher style stateful operation with block cipher style transformations. The design uses a 16-bit block size, a 128-bit initialization vector, eight internal 16-bit state words, an additional 16-bit LFSR-related state component, and eight stage-local 16-bit encryption components keyed by a 32 bit segment of the 256-bit master key. Each stage is built from 4-bit S-boxes, XOR, rotations, and modular addition. The authors argue that this construction gives a favourable trade off between security, performance, and implementation cost on 8-bit, 16-bit, and 32-bit platforms. The design paper also includes explicit resistance claims against several standard classes of attack, including differential, linear, algebraic, slide, related-key, interpolation, higher order differential, key collision, and statistical attacks \cite{VahiJassbi2020}. A later designer authored paper further discusses SEPAR's resistance to differential cryptanalysis \cite{VahiMirnia2021}.\\
+SEPAR is a proposed lightweight hybrid encryption algorithm for IoT environments \cite{VahiJassbi2020}. It is presented as combining stream cipher style stateful operation with block cipher style transformations. The design uses a 16-bit block size, a 128-bit initialization vector, eight internal 16-bit state words, an additional 16-bit LFSR related state component, and eight stagewise 16-bit encryption components keyed by a 32 bit segment of the 256-bit master key. Each stage is built from 4-bit S-boxes, XOR, rotations, and modular addition. The authors argue that this construction gives a favourable trade off between security, performance, and implementation cost on 8-bit, 16-bit, and 32-bit platforms. The design paper also includes explicit resistance claims against several standard classes of attack, including differential, linear, algebraic, slide, related key, interpolation, higher order differential, key collision, and statistical attacks \cite{VahiJassbi2020}. A later designer authored paper further discusses SEPAR's resistance to differential cryptanalysis \cite{VahiMirnia2021}.\\
 
 This project is motivated by preliminary analysis that has noticed several unusual behaviours in the SEPAR implementation. These behaviours do not, on their own, prove that SEPAR is insecure. Rather, they suggest that the cipher has structural features worth investigating carefully, which we will cover later.
 
@@ -54,7 +54,7 @@ The primary task of the project is to determine whether there any additional wea
 \textit{Does the SEPAR ciphers design expose structural or statistical properties that, under a clearly defined adversarial model, allow an attacker to distinguish, weaken, or recover information about the cipher more efficiently than generic exhaustive methods?}
 \end{quote}
 
-This thesis will begin from a set of suspicious design and implementation features, then test them. If the suspected weaknesses can be formalised and connected, the project may produce a practical attack or a theoretical shortcut. If they cannot, the project should still produce a useful negative result by explaining which apparent weaknesses were artefacts, which were real but insufficient, and which parts of SEPAR resisted the analysis entirely, satisfying the lack of critical discussion on SEPAR in the literature, and contributing to the third-party criticism focused literature of cryptography as a whole.\\
+This thesis will begin from a set of suspicious design and implementation features, then test them. If the suspected weaknesses can be formalised and connected, the project may produce a practical attack or a theoretical shortcut. If they cannot, the project should still produce a useful negative result by explaining which apparent weaknesses were artefacts, which were real but insufficient, and which parts of SEPAR resisted the analysis entirely, satisfying the lack of critical discussion on SEPAR in the literature, and contributing to the third party criticism focused literature of cryptography as a whole.\\
 
 
 
@@ -66,7 +66,7 @@ This lesson is especially important in lightweight design. A compact cipher may 
 
 \subsection{SEPAR as a hybrid lightweight construction}
 
-SEPAR is described by its designers as a hybrid algorithm that draws on both block cipher and stream cipher ideas \cite{VahiJassbi2020}. In encryption, a 16-bit block passes through eight \texttt{ENC\_Block} calls. In the implementation, if the eight state words are denoted $s_1,\ldots,s_8$ and the eight stage-local permutations are denoted $E_1,\ldots,E_8$, then one reset one-word encryption can be modelled as
+SEPAR is described by its designers as a hybrid algorithm that draws on both block cipher and stream cipher ideas \cite{VahiJassbi2020}. In encryption, a 16-bit block passes through eight \texttt{ENC\_Block} calls. In the implementation, if the eight state words are denoted $s_1,\ldots,s_8$ and the eight stagewise permutations are denoted $E_1,\ldots,E_8$, then one reset one block encryption can be modelled as
 \[
 F_{\mathrm{IV}}
 =B_8^{(s_8)}\circ B_7^{(s_7)}\circ \cdots \circ B_1^{(s_1)},
@@ -75,7 +75,7 @@ B_i^{(s_i)}(x)=E_i(x+s_i),
 \]
 where addition is modulo $2^{16}$. This representation is important because it separates the stage local keyed permutation $E_i$ from the IV dependent state translation $s_i$. The public ciphertext word is not merely the output of one monolithic black box; it is the output of a cascade whose internal structure may or may not remain hidden assuming a complete codebook can be collected.\\
 
-The stage itself is built from repeated S-box, linear-layer, and key-addition operations. A natural implementation treats a stage key as a pair of 16-bit words
+The stage itself is built from repeated S-box, linear layer, and key addition operations. A natural implementation treats a stage key as a pair of 16-bit words
 \[
 K_i=(k_{i,0},k_{i,1})\in \Z{2^{16}}\times\Z{2^{16}},
 \]
@@ -85,7 +85,7 @@ The design specification argues that SEPAR's state and initialization choices he
 
 \subsection{Lessons from Hummingbird-1}
 
-Hummingbird-1 is the closest motivating example for this project because it is also a hybrid lightweight design intended for constrained devices \cite{Engels2010}. Like SEPAR, it was motivated by environments such as RFID tags, smart cards, and wireless sensor nodes, and it combined a small-block internal structure with stateful operation - very similar to SEPARS construction at an aesthetic level. The general design idea was not unreasonable: use compact 16-bit components and internal state to obtain a low cost authenticated encryption mechanism for devices that cannot afford larger conventional primitives.\\
+Hummingbird-1 is the closest motivating example for this project because it is also a hybrid lightweight design intended for constrained devices \cite{Engels2010}. Like SEPAR, it was motivated by environments such as RFID tags, smart cards, and wireless sensor nodes, and it combined a small block internal structure with stateful operation - very similar to SEPARS construction at an aesthetic level. The general design idea was not unreasonable: use compact 16-bit components and internal state to obtain a low cost authenticated encryption mechanism for devices that cannot afford larger conventional primitives.\\
 
 The subsequent cryptanalysis of Hummingbird-1 is therefore highly relevant. Saarinen's cryptanalysis showed that the first Hummingbird design contained exploitable weaknesses despite its intended hybrid structure \cite{Saarinen2011}. The significance for this thesis is not that SEPAR and Hummingbird-1 will share the same weaknesses. They do not. The significance is that internal state introduced by a hybrid mode of operation do not automatically compensate for the risks created by a small block size, or simple round design. If an adversary can choose inputs, control or repeat initialization conditions, and observe enough of the domain (which is made much more feasible by the 16 bit block size), then stateful confusion may not prevent a structural attack.\\
 
@@ -95,7 +95,7 @@ For the proposed thesis, Hummingbird-1 therefore provides a model of how to fram
 
 \subsection{Other broken lightweight or constrained ciphers}
 
-Several other lightweight or constrained ciphers reinforce the same methodological lesson. KeeLoq, for example, is a 32-bit block cipher with a 64-bit key that was widely used in passive entry and remote keyless entry systems. Bogdanov proposed a key-recovery attack with complexity around $2^{52}$ KeeLoq encryptions \cite{BogdanovKeeLoq2007}. The relevance to SEPAR is the role of small blocks and repeated structure. KeeLoq was not broken because its ciphertexts failed a generic randomness test in a simple way. It was attacked by exploiting properties of the actual block cipher construction and its operational setting.\\
+Several other lightweight or constrained ciphers reinforce the same methodological lesson. KeeLoq, for example, is a 32-bit block cipher with a 64-bit key that was widely used in passive entry and remote keyless entry systems. Bogdanov proposed a key recovery attack with complexity around $2^{52}$ KeeLoq encryptions \cite{BogdanovKeeLoq2007}. The relevance to SEPAR is the role of small blocks and repeated structure. KeeLoq was not broken because its ciphertexts failed a generic randomness test in a simple way. It was attacked by exploiting properties of the actual block cipher construction and its operational setting.\\
 
 KTANTAN provides a different example. It is a family of small, hardware oriented block ciphers designed for low resource applications. Bogdanov and Rechberger gave meet-in-the-middle attacks on the full KTANTAN family that exploit weaknesses in the bitwise key schedule and have very low data requirements \cite{BogdanovRechberger2010}. This is relevant because SEPAR's attack surface may also involve separating key material by stage. They show how a cipher with a large nominal key can become vulnerable if enough of the computation depends on separable subsets of key bits.\\
 
@@ -103,9 +103,9 @@ The broader point is that the security of lightweight cryptography often hinges 
 
 \subsection{Comparable designs that \textit{have} withstood broader scrutiny}
 
-It is also important to compare SEPAR with lightweight designs that are not generally treated as cautionary broken examples. PRESENT and GIFT are useful reference points \cite{Bogdanov2007,Banik2017}. Both are lightweight block cipher families built around small S-Boxes and permutations, and both have attracted substantial public cryptanalysis. The relevance is not that any cipher can be proven secure forever by surviving a number of papers. Rather, these designs illustrate how a mature lightweight proposal normally develops. The design is specified precisely, the security argument is connected to problems we conject to be hard to solve (eg. discrete logarithm, factoring), and specific statstical tests aimed at the ciphers potential weaknesses are conducted, and the design choice that mitigates these are fully rationalised in a rigorous way in the proposal paper, rather than with high level claims. Reduced round analysis accumulates over time, and the remaining full-round security claim is understood in relation to explicit security margins, giving confidence (in place of hard proof) that these designs are secure.\\
+It is also important to compare SEPAR with lightweight designs that are not generally treated as cautionary broken examples. PRESENT and GIFT are useful reference points \cite{Bogdanov2007,Banik2017}. Both are lightweight block cipher families built around small S-Boxes and permutations, and both have attracted substantial public cryptanalysis. The relevance is not that any cipher can be proven secure forever by surviving a number of papers. Rather, these designs illustrate how a mature lightweight proposal normally develops. The design is specified precisely, the security argument is connected to problems we conject to be hard to solve (eg. discrete logarithm, factoring), and specific statstical tests aimed at the ciphers potential weaknesses are conducted, and the design choice that mitigates these are fully rationalised in a rigorous way in the proposal paper, rather than with high level claims. Reduced round analysis accumulates over time, and the remaining full round security claim is understood in relation to explicit security margins, giving confidence (in place of hard proof) that these designs are secure.\\
 
-This comparison helps clarify what is missing for SEPAR. SEPAR has a published specification with some partially justified claims about statistical aspects of the cipher, a published implementation, and designer authored security discussion on the differential property of the standalone S-Boxes, but it does not appear to have the same depth of independent (or indeed even self) analysis as we would expect for other ciphers. Its hybrid structure also differs from classical SPN block-cipher designs such as PRESENT and GIFT - direct comparison of cycle counts or memory usage is therefore not enough. If SEPAR's unusual state and stage structure is the main source of its claimed security, then that structure must itself be analysed.
+This comparison helps clarify what is missing for SEPAR. SEPAR has a published specification with some partially justified claims about statistical aspects of the cipher, a published implementation, and designer authored security discussion on the differential property of the standalone S-Boxes, but it does not appear to have the same depth of independent (or indeed even self) analysis as we would expect for other ciphers. Its hybrid structure also differs from classical SPN block cipher designs such as PRESENT and GIFT - direct comparison of cycle counts or memory usage is therefore not enough. If SEPAR's unusual state and stage structure is the main source of its claimed security, then that structure must itself be analysed.
 
 \section{Preliminary SEPAR Observations}
 
@@ -125,7 +125,7 @@ If outer stages could somehow be recognised, and if the corresponding state tran
 \[
 F_{\mathrm{IV}}=B_8^{(s_8)}\circ R_7,
 \]
-solving the outer component would transform the observed table into a translated version of the seven-stage inner cascade $R_7$. In principle, repeating this idea could reduce the problem one stage at a time.
+solving the outer component would transform the observed table into a translated version of the seven stage inner cascade $R_7$. In principle, repeating this idea could reduce the problem one stage at a time.
 
 Several major questions must be answered before we can confirm this works; Does any observable feature of the codebook identify a stage key more efficiently than brute force? Can the unknown state translation be recovered, cancelled, or made irrelevant to the score being used? Does a peel preserve enough information to attack the next stage? Does the process branch, and if so, what complexity bound does incur? Much work remains to be done in answering these questions, however given the ciphers design, and the implications of stage by stage peeling, this would be a very desirable property to have for any proposed attack, so we note it here.
 
@@ -135,7 +135,7 @@ One of the most interesting preliminary observations is the apparent quotient st
 \[
 H(y)=\left\lfloor \frac{y}{2^8}\right\rfloor
 \]
-be the high byte of a 16-bit encryption. For a stage key $K_i$, define the high-byte quotient map
+be the high byte of a 16-bit encryption. For a stage key $K_i$, define the high byte quotient map
 \[
 Q_{i,K_i}(h)=H(E_i(256h)),\qquad h\in\Z{256},
 \]
@@ -143,13 +143,13 @@ and a projected 4-bit map
 \[
 q_{i,K_i}(h)=Q_{i,K_i}(h)\bmod 16.
 \]
-Preliminary testing suggests that these quotient views may reveal information about stage-local behaviour that is less visible in the full 16-bit permutation. In testing, it was seen that some stage key bits appear invisible when examining a single stage permutation, although it remains to be seen if this information can be seen from an attackers perspective rather than a testing harness (with internal visibility over the cipher), and whether or not this map will vary from key to key.\\
+Preliminary testing suggests that these quotient views may reveal information about stagewise behaviour that is less visible in the full 16-bit permutation. In testing, it was seen that some stage key bits appear invisible when examining a single stage permutation, although it remains to be seen if this information can be seen from an attackers perspective rather than a testing harness (with internal visibility over the cipher), and whether or not this map will vary from key to key.\\
 
 This could be useful if the quotient is invariant between keys, and can be abused from an adversarial position, as it will allow an attacker to extract information about the reduced quotient, rather than guessing the whole key in one go, potentially providing a way to separate the key bits and guess candidate keys from a reduced bound compared to traditional bruteforce.\\
 
 \subsection{Triangularity and weak diffusion}
 
-Another promising observation concerns the implemented linear layer and possible triangular behaviour. Preliminary statistical analysis suggests that some parts of the \texttt{ENC\_Block} computation may allow upper-byte information to evolve with limited influence from lower-byte information, at least before modular additions introduce carries. If true, this would be cryptanalytically important because it could reduce a 16-bit problem to smaller coupled subproblems.
+Another promising observation concerns the implemented linear layer and possible triangular behaviour. Preliminary statistical analysis suggests that some parts of the \texttt{ENC\_Block} computation may allow upper byte information to evolve with limited influence from lower byte information, at least before modular additions introduce carries. If true, this would be cryptanalytically important because it could reduce a 16-bit problem to smaller coupled subproblems.
 
 This needs further verification however - the state additions, S-box layers, repeated stages, and carries may destroy or hide the structure by the time the attacker observes the final ciphertext word, as opposed to the clean single enc block view during testing.\\
 
@@ -198,7 +198,7 @@ Another key part of this stage is a second focused attempt to identify points of
 
 \subsection{Stage 2: Adversarial model and public observables}
 
-The next stage is to define the adversarial model. The working model may include chosen plaintext, chosen IV, and state reset between oracle calls, but each capability must be justified under an adversarial model. It should also identify which oberservables exist under which adversarial models. For example, a full codebook observation may require reset access, while a matched-context experiment may require chosen prefixes. The model should be stated before any attack claim is made.\\
+The next stage is to define the adversarial model. The working model may include chosen plaintext, chosen IV, and state reset between oracle calls, but each capability must be justified under an adversarial model. It should also identify which oberservables exist under which adversarial models. For example, a full codebook observation may require reset access, while a matched context experiment may require chosen prefixes. The model should be stated before any attack claim is made.\\
 
 For each fixed IV, the strongest primary observable will likely be the complete codebook
 \[
@@ -212,7 +212,7 @@ The third stage is to test each preliminary weakness independently;
 
 \begin{enumerate}
 \item For stage structure, we will formalise the translated stage cascade and determine what information remains visible after one or more stages are composed.
-\item For quotient structure, we will define the exact high-byte and projected quotient maps, then test whether they reliably expose key information.
+\item For quotient structure, we will define the exact high byte and projected quotient maps, then test whether they reliably expose key information.
 \item For triangularity, we will analyse the implemented linear layer and trace whether limited dependency behaviour survives through full rounds.
 \item For differential properties, we will perform statistical testing and measure biases.
 \item For matched contexts, the project will build experiments that compare encryption and decryption behaviour under controlled state conditions.
