@@ -1,0 +1,22 @@
+trial=1 key=8F49D9A8C3C8F74BB51D0F15C27E96F092F658E352F06D0F76409B067CC486DC iv=5CC1EC67555EC90BB5B902803CA58575
+
+===== lane-rank 1; exit=0 =====
+SEPAR deterministic exhaustive-prefix K8 bootstrap
+threads=8 prefixes=65536 probes={0,1,2,4,8,15,16}
+oracle_messages=458752 logical_word_encryptions=917504 optimized_word_encryptions=524288
+audit_true_K8=(7CC4,86DC) audit_true_nu=316C
+phase=query+aggregate elapsed=0.076 s edges=393216
+phase=lane-enumeration elapsed=0.010 s candidates=65536 global_maximizers=1
+selected_lane_start_rank=1 selected_lane_count=1
+true_lane_rank=1 true_lane_score=28473 greater=0 tied=1
+lane[1] nu=316C score=28473 true
+lift_lane=316C k0_candidates=192 k1_candidates=576 pair_candidates=110592
+phase=high-byte-lift elapsed=0.186 s
+true_K8_lift_rank=1 true_K8_lift_score=11964 greater=0 tied=3
+K8-high[1]=(7CC4,86DC) score=11964 true
+phase=full-block-lift elapsed=0.008 s high_global_maximizers=3 beam=3 full_global_maximizers=1 unique_observed_edges=392956
+true_K8_full_rank=1 true_K8_full_score=1255
+K8-full[1]=(7CC4,86DC) score=1255 true
+candidate_K8=(7CC4,86DC) score=1255
+recovered_K8=(7CC4,86DC) audit=match
+total_elapsed=0.280 s

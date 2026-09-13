@@ -1,0 +1,37 @@
+COMMAND=./separ_ranked_inward --oracle-key 71CE3401A81668BB73DF9EA9B4C5960A62BCD4941770F7F4D5142C3712E7E549 --known-k8 12E7E549 --threads 8 --contexts 8 --seed 1 --lane-tiers 1 --pair-tiers 1 --state-tiers 1 --audit
+RETURN_CODE=2
+WALL_SECONDS=14.913291092
+STARTED_UTC=2026-09-10T14:43:49Z
+FINISHED_UTC=2026-09-10T14:44:04Z
+--- STDOUT ---
+SEPAR ranked inward recovery
+K8_SOURCE=external candidate=12E7E549 contexts=8 threads=8 seed=1
+BUDGETS lane=1 pair=1 state=1 (0=exhaustive) complete=0
+ORACLE codebook_contexts=8 codebook_reset_messages=524288 codebook_word_encryptions=524288 held_out_reset_messages=2 held_out_word_encryptions=128 total_reset_messages=524290 total_word_encryptions=524416
+AUDIT stage=8 context=1 byte_true=65 rank=1 tier_rank=1 tied=1 retained=256 support=7843
+AUDIT stage=8 context=2 byte_true=39 rank=1 tier_rank=1 tied=1 retained=256 support=7749
+AUDIT stage=8 context=3 byte_true=67 rank=1 tier_rank=1 tied=1 retained=256 support=6727
+AUDIT stage=8 context=4 byte_true=43 rank=1 tier_rank=1 tied=1 retained=256 support=6872
+AUDIT stage=8 context=5 byte_true=F8 rank=1 tier_rank=1 tied=1 retained=256 support=8209
+AUDIT stage=8 context=6 byte_true=F5 rank=1 tier_rank=1 tied=1 retained=256 support=6973
+AUDIT stage=8 context=7 byte_true=55 rank=1 tier_rank=1 tied=1 retained=256 support=5863
+AUDIT stage=8 context=8 byte_true=8F rank=1 tier_rank=1 tied=1 retained=256 support=6198
+AUDIT stage=7 S4_true_nu=E5C5 rank=1 tier_rank=1 tied=1 score=315492
+STAGE=7 phase=S4 elapsed=0.057
+AUDIT stage=7 S8_true_pair=D5142C37 rank=1 tier_rank=1 tied=3 fibre=24576 score=177898
+STAGE=7 phase=S8 nu=E5C5 fibre=24576 elapsed=5.769
+AUDIT stage=7 context=1 state_true=932B rank=1 tier_rank=1 tied=1 retained=28769 support=5663
+AUDIT stage=7 context=2 state_true=9719 rank=1 tier_rank=1 tied=1 retained=64 support=5685
+AUDIT stage=7 context=3 state_true=2537 rank=1 tier_rank=1 tied=1 retained=64272 support=4446
+AUDIT stage=7 context=4 state_true=C5C6 rank=1 tier_rank=1 tied=1 retained=63648 support=4867
+AUDIT stage=7 context=5 state_true=1890 rank=1 tier_rank=1 tied=1 retained=65532 support=5085
+AUDIT stage=7 context=6 state_true=547A rank=1 tier_rank=1 tied=1 retained=41648 support=4344
+AUDIT stage=7 context=7 state_true=D670 rank=1 tier_rank=1 tied=1 retained=65536 support=3735
+AUDIT stage=7 context=8 state_true=A07A rank=1 tier_rank=1 tied=1 retained=4624 support=3874
+AUDIT stage=6 S4_true_nu=3C77 rank=3 tier_rank=3 tied=1 score=221372
+STAGE=6 phase=S4 elapsed=0.061
+STAGE=6 phase=S8 nu=2134 fibre=24576 elapsed=5.162
+CONTEXT_RETIRED stage=7 context=1 first_tier=256 admissible=26080 active_before=8
+CONTEXT_RETIRED stage=7 context=1 first_tier=256 admissible=26014 active_before=8
+RESULT=INCONCLUSIVE reason=rank-budget-exhausted nodes=8 leaves=0 elapsed=14.906
+--- STDERR ---

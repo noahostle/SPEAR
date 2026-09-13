@@ -1,0 +1,99 @@
+COMMAND=./separ_ranked_inward --oracle-key 8F49D9A8C3C8F74BB51D0F15C27E96F092F658E352F06D0F76409B067CC486DC --known-k8 7CC486DC --threads 8 --contexts 8 --seed 1 --lane-tiers 1 --pair-tiers 1 --state-tiers 1 --audit
+RETURN_CODE=0
+WALL_SECONDS=126.640721235
+STARTED_UTC=2026-09-10T14:24:27Z
+FINISHED_UTC=2026-09-10T14:26:34Z
+--- STDOUT ---
+SEPAR ranked inward recovery
+K8_SOURCE=external candidate=7CC486DC contexts=8 threads=8 seed=1
+BUDGETS lane=1 pair=1 state=1 (0=exhaustive) complete=0
+ORACLE codebook_contexts=8 codebook_reset_messages=524288 codebook_word_encryptions=524288 held_out_reset_messages=2 held_out_word_encryptions=128 total_reset_messages=524290 total_word_encryptions=524416
+AUDIT stage=8 context=1 byte_true=05 rank=1 tier_rank=1 tied=1 retained=256 support=7383
+AUDIT stage=8 context=2 byte_true=CA rank=1 tier_rank=1 tied=1 retained=256 support=7212
+AUDIT stage=8 context=3 byte_true=1B rank=1 tier_rank=1 tied=1 retained=256 support=6898
+AUDIT stage=8 context=4 byte_true=F5 rank=1 tier_rank=1 tied=1 retained=256 support=6536
+AUDIT stage=8 context=5 byte_true=B8 rank=1 tier_rank=1 tied=1 retained=256 support=7308
+AUDIT stage=8 context=6 byte_true=F0 rank=1 tier_rank=1 tied=1 retained=256 support=3939
+AUDIT stage=8 context=7 byte_true=0C rank=1 tier_rank=1 tied=1 retained=256 support=5935
+AUDIT stage=8 context=8 byte_true=52 rank=1 tier_rank=1 tied=1 retained=256 support=14656
+AUDIT stage=7 S4_true_nu=A0B6 rank=1 tier_rank=1 tied=1 score=266738
+STAGE=7 phase=S4 elapsed=0.047
+AUDIT stage=7 S8_true_pair=76409B06 rank=1 tier_rank=1 tied=2 fibre=16384 score=115053
+STAGE=7 phase=S8 nu=A0B6 fibre=16384 elapsed=2.772
+AUDIT stage=7 context=1 state_true=9206 rank=1 tier_rank=1 tied=1 retained=15968 support=6626
+AUDIT stage=7 context=2 state_true=BC22 rank=1 tier_rank=1 tied=1 retained=64496 support=5402
+AUDIT stage=7 context=3 state_true=D7AD rank=1 tier_rank=1 tied=1 retained=65456 support=4350
+AUDIT stage=7 context=4 state_true=C2AD rank=1 tier_rank=1 tied=1 retained=4240 support=4214
+AUDIT stage=7 context=5 state_true=1F68 rank=1 tier_rank=1 tied=1 retained=65216 support=4692
+AUDIT stage=7 context=6 state_true=2603 rank=1 tier_rank=1 tied=1 retained=65344 support=3443
+AUDIT stage=7 context=7 state_true=1527 rank=1 tier_rank=1 tied=1 retained=65536 support=4283
+AUDIT stage=7 context=8 state_true=2686 rank=1 tier_rank=1 tied=1 retained=12 support=9684
+AUDIT stage=6 S4_true_nu=DCD2 rank=1 tier_rank=1 tied=1 score=233820
+STAGE=6 phase=S4 elapsed=0.058
+AUDIT stage=6 S8_true_pair=52F06D0F rank=1 tier_rank=1 tied=2 fibre=24576 score=126232
+STAGE=6 phase=S8 nu=DCD2 fibre=24576 elapsed=4.337
+AUDIT stage=6 context=1 state_true=0BC0 rank=1 tier_rank=1 tied=1 retained=266 support=4067
+AUDIT stage=6 context=2 state_true=1532 rank=1 tier_rank=1 tied=1 retained=64 support=3548
+AUDIT stage=6 context=3 state_true=8C82 rank=1 tier_rank=1 tied=1 retained=2060 support=2553
+AUDIT stage=6 context=4 state_true=77E9 rank=1 tier_rank=1 tied=1 retained=16 support=3101
+AUDIT stage=6 context=5 state_true=26F1 rank=1 tier_rank=1 tied=1 retained=1452 support=3850
+AUDIT stage=6 context=6 state_true=D8F4 rank=1 tier_rank=1 tied=1 retained=112 support=2736
+AUDIT stage=6 context=7 state_true=64EE rank=1 tier_rank=1 tied=1 retained=4847 support=3274
+AUDIT stage=6 context=8 state_true=F7AA rank=1 tier_rank=1 tied=1 retained=1 support=6150
+AUDIT stage=5 S4_true_nu=DD82 rank=1 tier_rank=1 tied=1 score=360073
+STAGE=5 phase=S4 elapsed=0.057
+AUDIT stage=5 S8_true_pair=92F658E3 rank=1 tier_rank=1 tied=3 fibre=36864 score=298374
+STAGE=5 phase=S8 nu=DD82 fibre=36864 elapsed=6.242
+AUDIT stage=5 context=1 state_true=4657 rank=1 tier_rank=1 tied=1 retained=3 support=2256
+AUDIT stage=5 context=2 state_true=A186 rank=1 tier_rank=1 tied=1 retained=4 support=2218
+AUDIT stage=5 context=3 state_true=7676 rank=1 tier_rank=1 tied=1 retained=16 support=1534
+AUDIT stage=5 context=4 state_true=F78E rank=1 tier_rank=1 tied=1 retained=12 support=1783
+AUDIT stage=5 context=5 state_true=E634 rank=1 tier_rank=1 tied=1 retained=32 support=2552
+AUDIT stage=5 context=6 state_true=FC53 rank=1 tier_rank=1 tied=1 retained=16 support=1668
+AUDIT stage=5 context=7 state_true=1CD1 rank=1 tier_rank=1 tied=1 retained=344 support=2125
+AUDIT stage=5 context=8 state_true=6655 rank=1 tier_rank=1 tied=1 retained=1 support=3611
+AUDIT stage=4 S4_true_nu=2F62 rank=1 tier_rank=1 tied=1 score=300751
+STAGE=4 phase=S4 elapsed=0.037
+AUDIT stage=4 S8_true_pair=C27E96F0 rank=1 tier_rank=1 tied=9 fibre=73728 score=228475
+STAGE=4 phase=S8 nu=2F62 fibre=73728 elapsed=12.814
+AUDIT stage=4 context=1 state_true=688A rank=1 tier_rank=1 tied=1 retained=1 support=1322
+AUDIT stage=4 context=2 state_true=B0E1 rank=1 tier_rank=1 tied=1 retained=1 support=1496
+AUDIT stage=4 context=3 state_true=74FF rank=1 tier_rank=1 tied=1 retained=1 support=1278
+AUDIT stage=4 context=4 state_true=BEA4 rank=1 tier_rank=1 tied=1 retained=3 support=1186
+AUDIT stage=4 context=5 state_true=CAC7 rank=1 tier_rank=1 tied=1 retained=1 support=1718
+AUDIT stage=4 context=6 state_true=E804 rank=1 tier_rank=1 tied=1 retained=1 support=1311
+AUDIT stage=4 context=7 state_true=CF0C rank=1 tier_rank=1 tied=1 retained=1 support=1642
+AUDIT stage=4 context=8 state_true=5C6B rank=1 tier_rank=1 tied=1 retained=1 support=1958
+AUDIT stage=3 S4_true_nu=47F5 rank=1 tier_rank=1 tied=1 score=215921
+STAGE=3 phase=S4 elapsed=0.069
+AUDIT stage=3 S8_true_pair=B51D0F15 rank=1 tier_rank=1 tied=9 fibre=73728 score=190800
+STAGE=3 phase=S8 nu=47F5 fibre=73728 elapsed=15.214
+AUDIT stage=3 context=1 state_true=9FF8 rank=1 tier_rank=1 tied=1 retained=1 support=992
+AUDIT stage=3 context=2 state_true=32E7 rank=1 tier_rank=1 tied=1 retained=1 support=960
+AUDIT stage=3 context=3 state_true=5508 rank=1 tier_rank=1 tied=1 retained=1 support=960
+AUDIT stage=3 context=4 state_true=D507 rank=1 tier_rank=1 tied=1 retained=1 support=784
+AUDIT stage=3 context=5 state_true=82C0 rank=1 tier_rank=1 tied=1 retained=1 support=958
+AUDIT stage=3 context=6 state_true=4891 rank=1 tier_rank=1 tied=1 retained=1 support=768
+AUDIT stage=3 context=7 state_true=18D7 rank=1 tier_rank=1 tied=1 retained=1 support=1008
+AUDIT stage=3 context=8 state_true=5054 rank=1 tier_rank=1 tied=1 retained=1 support=1008
+AUDIT stage=2 S4_true_nu=F373 rank=1 tier_rank=1 tied=1 score=257218
+STAGE=2 phase=S4 elapsed=0.053
+AUDIT stage=2 S8_true_pair=C3C8F74B rank=1 tier_rank=1 tied=18 fibre=331776 score=243554
+STAGE=2 phase=S8 nu=F373 fibre=331776 elapsed=56.731
+AUDIT stage=2 context=1 state_true=D63E rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=2 state_true=C14F rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=3 state_true=A6D1 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=4 state_true=F807 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=5 state_true=6943 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=6 state_true=EBF2 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=7 state_true=5B70 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=2 context=8 state_true=4444 rank=1 tier_rank=1 tied=1 retained=1 support=512
+AUDIT stage=1 S4_true_nu=329F rank=1 tier_rank=1 tied=1 score=94208
+STAGE=1 phase=S4 elapsed=0.040
+AUDIT stage=1 S8_true_pair=8F49D9A8 rank=1 tier_rank=1 tied=2 fibre=73728 score=94208
+STAGE=1 phase=S8 nu=329F fibre=73728 elapsed=12.979
+VERIFICATION=PASS codebooks=8x65536 held_out=2x64 reconstructed_initialization_contexts=8 retired_contexts=0
+RECOVERED_KEY=8F49D9A8C3C8F74BB51D0F15C27E96F092F658E352F06D0F76409B067CC486DC
+AUDIT_EXACT_KEY=PASS
+RESULT=SUCCESS nodes=48 leaves=1 elapsed=126.616
+--- STDERR ---
