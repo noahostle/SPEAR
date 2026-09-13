@@ -65,8 +65,9 @@ The binomial intervals have their stated coverage if the predetermined keys
 are independent draws from the population of interest.  Distinctness alone is
 not enough to establish that premise.  The inward rate is conditional on the
 correct (K_8); the matched-key conjunction does not replay the inward search
-for false outer candidates that precede the true one, and no end-to-end wrapper
-latency was measured.  Timings are for the local-oracle implementation and are
+for false outer candidates that precede the true one, and no end-to-end latency
+was measured in the 100-key evaluation.  Timings are for the local-oracle
+implementation and are
 machine-, compiler-, and thread-scheduling-dependent.  The attack also assumes
 the repeated-reset, chosen-IV interface described in the paper; these results
 do not apply directly to a nonce-respecting interface.
@@ -90,6 +91,5 @@ do not apply directly to a nonce-respecting interface.
 - `joint_success`: `outer_success AND inward_success` on the same key.
 
 The three logs in `logs/` show one successful outer bootstrap, one successful
-inward recovery, and the trial-15 (S_4) rank miss.  They retain the program's
-substantive output; only the archive-specific absolute executable path was
-normalised.
+inward recovery, and the trial-15 (S_4) rank miss from the phase-level
+evaluation.

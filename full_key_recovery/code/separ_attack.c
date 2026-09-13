@@ -1,16 +1,1036 @@
 /*
+ * Unified threaded proof of concept for the SEPAR key-recovery attack.
+ *
+ * Usage:
+ *     ./separ_attack HEX64
+ *
+ * HEX64 is the 256-bit key used by the local demonstration oracle.  The
+ * program performs the fixed-IV outer attack, passes its transcript-ranked
+ * K8 candidate directly to the bounded inward search, and accepts a key only
+ * after replaying all cached codebooks and held-out transcripts.
+ *
+ * The attack path never reads the supplied key except through the local
+ * oracle routines.  The final DEMO_EXACT line is an after-the-fact check.
+ */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+#include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#endif
+
+#define WORDS 65536u
+#define LANE_EDGES 256u
+#define BYTE_EDGES 65536u
+#define PROBE_COUNT 7u
+#define DIFF_COUNT 6u
+
+typedef struct {
+    uint16_t state[8];
+    uint16_t lfsr;
+} SeparCtx;
+
+typedef struct {
+    uint64_t score;
+    uint16_t k0;
+    uint16_t k1;
+} PairScore;
+
+typedef struct {
+    uint32_t key;
+    uint32_t count;
+} EdgeCount;
+
+static const uint8_t S1[16] = {
+    1, 15, 11, 2, 0, 3, 5, 8, 6, 9, 12, 7, 13, 10, 14, 4
+};
+static const uint8_t S2[16] = {
+    6, 10, 15, 4, 14, 13, 9, 2, 1, 7, 12, 11, 0, 3, 5, 8
+};
+static const uint8_t S3[16] = {
+    12, 2, 6, 1, 0, 3, 5, 8, 7, 9, 11, 14, 10, 13, 15, 4
+};
+static const uint8_t S4[16] = {
+    13, 11, 2, 7, 0, 3, 5, 8, 6, 12, 15, 1, 10, 4, 9, 14
+};
+static const uint8_t IS1[16] = {
+    4, 0, 3, 5, 15, 6, 8, 11, 7, 9, 13, 2, 10, 12, 14, 1
+};
+static const uint8_t IS2[16] = {
+    12, 8, 7, 13, 3, 14, 0, 9, 15, 6, 1, 11, 10, 5, 4, 2
+};
+static const uint8_t IS3[16] = {
+    4, 3, 1, 5, 15, 6, 2, 8, 7, 9, 12, 10, 0, 13, 11, 14
+};
+static const uint8_t IS4[16] = {
+    4, 11, 2, 5, 13, 6, 8, 3, 7, 14, 12, 1, 9, 0, 15, 10
+};
+
+static const uint16_t DEFAULT_KEY[16] = {
+    0xE8B9, 0xB733, 0xDA5D, 0x96D7, 0x02DD, 0x3972, 0xE953, 0x07FD,
+    0x50C5, 0x12DB, 0xF44A, 0x233E, 0x8D1E, 0x9DF5, 0xFC7D, 0x6371
+};
+
+static const uint16_t PROBES[PROBE_COUNT] = {
+    0x0000, 0x0001, 0x0002, 0x0004, 0x0008, 0x000F, 0x0010
+};
+
+static _Noreturn void die(const char *message)
+{
+    fprintf(stderr, "error: %s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static inline uint64_t now_ns(void)
+{
+#if defined(_WIN32)
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+    if (frequency.QuadPart == 0) {
+        if (!QueryPerformanceFrequency(&frequency))
+            return GetTickCount64() * 1000000ULL;
+    }
+    if (!QueryPerformanceCounter(&counter))
+        return GetTickCount64() * 1000000ULL;
+    {
+        uint64_t count = (uint64_t)counter.QuadPart;
+        uint64_t freq = (uint64_t)frequency.QuadPart;
+        uint64_t seconds = count / freq;
+        uint64_t remainder = count % freq;
+        return seconds * 1000000000ULL +
+               (remainder * 1000000000ULL) / freq;
+    }
+#else
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
+        die("clock_gettime failed");
+    return (uint64_t)value.tv_sec * 1000000000ULL +
+           (uint64_t)value.tv_nsec;
+#endif
+}
+
+static inline unsigned detected_threads(void)
+{
+#if defined(_WIN32)
+    DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    return n == 0 ? 1u : (unsigned)n;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n < 1 ? 1u : (unsigned)n;
+#endif
+}
+
+static inline uint16_t rotl16(uint16_t x, unsigned amount)
+{
+    amount &= 15u;
+    if (amount == 0u) return x;
+    return (uint16_t)((uint16_t)(x << amount) |
+                      (uint16_t)(x >> (16u - amount)));
+}
+
+static inline uint16_t rotr16(uint16_t x, unsigned amount)
+{
+    amount &= 15u;
+    if (amount == 0u) return x;
+    return (uint16_t)((uint16_t)(x >> amount) |
+                      (uint16_t)(x << (16u - amount)));
+}
+
+static inline uint16_t sbox_layer(uint16_t x)
+{
+    return (uint16_t)(((uint16_t)S1[(x >> 12) & 15u] << 12) |
+                      ((uint16_t)S2[(x >> 8) & 15u] << 8) |
+                      ((uint16_t)S3[(x >> 4) & 15u] << 4) |
+                      (uint16_t)S4[x & 15u]);
+}
+
+static inline uint16_t isbox_layer(uint16_t x)
+{
+    return (uint16_t)(((uint16_t)IS1[(x >> 12) & 15u] << 12) |
+                      ((uint16_t)IS2[(x >> 8) & 15u] << 8) |
+                      ((uint16_t)IS3[(x >> 4) & 15u] << 4) |
+                      (uint16_t)IS4[x & 15u]);
+}
+
+static inline uint16_t separ_linear(uint16_t x)
+{
+    uint8_t a = (uint8_t)(x >> 12);
+    uint8_t b = (uint8_t)((x >> 8) & 15u);
+    uint8_t c = (uint8_t)((x >> 4) & 15u);
+    uint8_t d = (uint8_t)(x & 15u);
+    uint16_t y;
+    a ^= c;
+    b ^= d;
+    c ^= b;
+    d ^= a;
+    y = (uint16_t)(((uint16_t)a << 12) | ((uint16_t)b << 8) |
+                   ((uint16_t)c << 4) | (uint16_t)d);
+    return (uint16_t)(y ^ rotl16(y, 12) ^ rotl16(y, 8));
+}
+
+static inline uint16_t separ_linear_inverse(uint16_t x)
+{
+    uint8_t a, b, c, d;
+    x = (uint16_t)(x ^ rotr16(x, 12) ^ rotr16(x, 8));
+    a = (uint8_t)(x >> 12);
+    b = (uint8_t)((x >> 8) & 15u);
+    c = (uint8_t)((x >> 4) & 15u);
+    d = (uint8_t)(x & 15u);
+    d ^= a;
+    c ^= b;
+    b ^= d;
+    a ^= c;
+    return (uint16_t)(((uint16_t)a << 12) | ((uint16_t)b << 8) |
+                      ((uint16_t)c << 4) | (uint16_t)d);
+}
+
+static inline void derive_key23(uint16_t k0, uint16_t k1, uint8_t stage,
+                                uint16_t *key2, uint16_t *key3)
+{
+    uint16_t x2 = rotl16(k0, 6);
+    uint16_t x3 = rotl16(k1, 10);
+    uint8_t b2 = (uint8_t)((x2 >> 6) & 15u);
+    uint8_t b3 = (uint8_t)((x3 >> 6) & 15u);
+    x2 |= (uint16_t)((uint16_t)S1[b2] << 6);
+    x3 |= (uint16_t)((uint16_t)S1[b3] << 6);
+    x2 ^= (uint16_t)(stage + 2u);
+    x3 ^= (uint16_t)(stage + 3u);
+    *key2 = x2;
+    *key3 = x3;
+}
+
+static inline uint16_t enc_block(uint16_t input, uint16_t k0, uint16_t k1,
+                                 uint8_t stage)
+{
+    uint16_t key2, key3, x;
+    derive_key23(k0, k1, stage, &key2, &key3);
+    x = (uint16_t)(input ^ k0);
+    x = separ_linear(sbox_layer(x));
+    x ^= k1;
+    x = separ_linear(sbox_layer(x));
+    x ^= key2;
+    x = separ_linear(sbox_layer(x));
+    x ^= key3;
+    x = separ_linear(sbox_layer(x));
+    x ^= (uint16_t)(k0 ^ k1);
+    x = sbox_layer(x);
+    x ^= (uint16_t)(key2 ^ key3);
+    return x;
+}
+
+static inline uint16_t dec_block(uint16_t input, uint16_t k0, uint16_t k1,
+                                 uint8_t stage)
+{
+    uint16_t key2, key3, x;
+    derive_key23(k0, k1, stage, &key2, &key3);
+    x = (uint16_t)(input ^ key2 ^ key3);
+    x = isbox_layer(x);
+    x ^= (uint16_t)(k0 ^ k1);
+    x = isbox_layer(separ_linear_inverse(x));
+    x ^= key3;
+    x = isbox_layer(separ_linear_inverse(x));
+    x ^= key2;
+    x = isbox_layer(separ_linear_inverse(x));
+    x ^= k1;
+    x = isbox_layer(separ_linear_inverse(x));
+    x ^= k0;
+    return x;
+}
+
+static inline void initial_state(const uint16_t key[16], const uint16_t iv[8],
+                                 SeparCtx *ctx)
+{
+    uint16_t ct = 0;
+    memcpy(ctx->state, iv, sizeof(ctx->state));
+    for (unsigned round = 0; round < 4u; ++round) {
+        uint16_t v12 = enc_block((uint16_t)(ctx->state[0] + ctx->state[2] + ctx->state[4] + ctx->state[6]), key[0], key[1], 1);
+        uint16_t v23 = enc_block((uint16_t)(v12 + ctx->state[1]), key[2], key[3], 2);
+        uint16_t v34 = enc_block((uint16_t)(v23 + ctx->state[2]), key[4], key[5], 3);
+        uint16_t v45 = enc_block((uint16_t)(v34 + ctx->state[3]), key[6], key[7], 4);
+        uint16_t v56 = enc_block((uint16_t)(v45 + ctx->state[4]), key[8], key[9], 5);
+        uint16_t v67 = enc_block((uint16_t)(v56 + ctx->state[5]), key[10], key[11], 6);
+        uint16_t v78 = enc_block((uint16_t)(v67 + ctx->state[6]), key[12], key[13], 7);
+        ct = enc_block((uint16_t)(v78 + ctx->state[7]), key[14], key[15], 8);
+        ctx->state[0] = (uint16_t)(ctx->state[0] + ct);
+        ctx->state[1] = (uint16_t)(ctx->state[1] + v12);
+        ctx->state[2] = (uint16_t)(ctx->state[2] + v23);
+        ctx->state[3] = (uint16_t)(ctx->state[3] + v34);
+        ctx->state[4] = (uint16_t)(ctx->state[4] + v45);
+        ctx->state[5] = (uint16_t)(ctx->state[5] + v56);
+        ctx->state[6] = (uint16_t)(ctx->state[6] + v67);
+        ctx->state[7] = (uint16_t)(ctx->state[7] + v78);
+    }
+    ctx->lfsr = (uint16_t)(ct | 0x0100u);
+}
+
+static inline uint16_t encrypt_word(uint16_t pt, SeparCtx *ctx,
+                                    const uint16_t key[16])
+{
+    uint16_t v12 = enc_block((uint16_t)(pt + ctx->state[0]), key[0], key[1], 1);
+    uint16_t v23 = enc_block((uint16_t)(v12 + ctx->state[1]), key[2], key[3], 2);
+    uint16_t v34 = enc_block((uint16_t)(v23 + ctx->state[2]), key[4], key[5], 3);
+    uint16_t v45 = enc_block((uint16_t)(v34 + ctx->state[3]), key[6], key[7], 4);
+    uint16_t v56 = enc_block((uint16_t)(v45 + ctx->state[4]), key[8], key[9], 5);
+    uint16_t v67 = enc_block((uint16_t)(v56 + ctx->state[5]), key[10], key[11], 6);
+    uint16_t v78 = enc_block((uint16_t)(v67 + ctx->state[6]), key[12], key[13], 7);
+    uint16_t ct = enc_block((uint16_t)(v78 + ctx->state[7]), key[14], key[15], 8);
+    ctx->state[1] = (uint16_t)(ctx->state[1] + v12 + v56 + ctx->state[5]);
+    ctx->state[2] = (uint16_t)(ctx->state[2] + v23 + v34 + ctx->state[3] + ctx->state[0]);
+    ctx->state[3] = (uint16_t)(ctx->state[3] + v12 + v45 + ctx->state[7]);
+    ctx->state[4] = (uint16_t)(ctx->state[4] + v23);
+    ctx->state[5] = (uint16_t)(ctx->state[5] + v12 + v45 + ctx->state[6]);
+    ctx->state[6] = (uint16_t)(ctx->state[6] + v23 + v67);
+    ctx->state[7] = (uint16_t)(ctx->state[7] + v45);
+    ctx->state[0] = (uint16_t)(ctx->state[0] + v34 + v23 + ctx->state[4] + v78);
+    ctx->lfsr = (uint16_t)((ctx->lfsr >> 1) ^
+                 ((uint16_t)(-(int)(ctx->lfsr & 1u)) & 0xCA44u));
+    ctx->state[4] = (uint16_t)(ctx->state[4] + ctx->lfsr);
+    return ct;
+}
+
+static inline void lane_permutation(uint16_t nu, uint8_t out[16])
+{
+    uint8_t beta0 = (uint8_t)(nu & 15u);
+    uint8_t beta1 = (uint8_t)((nu >> 4) & 15u);
+    uint8_t beta2 = (uint8_t)((nu >> 8) & 15u);
+    uint8_t beta3 = (uint8_t)((nu >> 12) & 15u);
+    for (uint8_t b = 0; b < 16u; ++b) {
+        uint8_t v = S2[b ^ beta0];
+        v = S2[v ^ beta1];
+        v = S2[v ^ beta2];
+        v = S2[v ^ beta3];
+        out[b] = (uint8_t)(S2[v ^ beta0 ^ beta1] ^ beta2 ^ beta3);
+    }
+}
+
+static inline uint16_t lane_tuple_from_pair(uint16_t k0, uint16_t k1)
+{
+    uint16_t key2, key3;
+    uint16_t beta0 = (uint16_t)((k0 >> 8) & 15u);
+    uint16_t beta1 = (uint16_t)((k1 >> 8) & 15u);
+    derive_key23(k0, k1, 8, &key2, &key3);
+    return (uint16_t)(beta0 | (uint16_t)(beta1 << 4) |
+                      (uint16_t)(((key2 >> 8) & 15u) << 8) |
+                      (uint16_t)(((key3 >> 8) & 15u) << 12));
+}
+
+static inline size_t collect_word_candidates(uint8_t beta_direct,
+                                             uint8_t beta_derived,
+                                             int first_word,
+                                             uint16_t values[WORDS])
+{
+    size_t count = 0;
+    for (uint32_t x = 0; x < WORDS; ++x) {
+        uint16_t key2, key3;
+        uint16_t derived;
+        derive_key23(first_word ? (uint16_t)x : 0,
+                     first_word ? 0 : (uint16_t)x, 8, &key2, &key3);
+        derived = first_word ? key2 : key3;
+        if (((x >> 8) & 15u) != beta_direct) continue;
+        if ((((uint32_t)derived >> 8) & 15u) != beta_derived) continue;
+        values[count++] = (uint16_t)x;
+    }
+    return count;
+}
+
+static inline uint32_t edge_multiplicity(const EdgeCount *edges, size_t count,
+                                         uint32_t key)
+{
+    size_t low = 0, high = count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2u;
+        if (edges[middle].key < key) low = middle + 1u;
+        else high = middle;
+    }
+    return low < count && edges[low].key == key ? edges[low].count : 0u;
+}
+
+static inline int uint32_compare(const void *left, const void *right)
+{
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static inline int hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static inline int parse_hex_words(const char *text, uint16_t *words,
+                                  size_t count)
+{
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) text += 2;
+    if (strlen(text) != count * 4u) return -1;
+    for (size_t i = 0; i < count; ++i) {
+        unsigned value = 0;
+        for (size_t j = 0; j < 4u; ++j) {
+            int digit = hex_value(text[i * 4u + j]);
+            if (digit < 0) return -1;
+            value = (value << 4) | (unsigned)digit;
+        }
+        words[i] = (uint16_t)value;
+    }
+    return 0;
+}
+
+static inline unsigned parse_unsigned_arg(const char *name, const char *text,
+                                          unsigned minimum,
+                                          unsigned maximum)
+{
+    char *end = NULL;
+    unsigned long value;
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < minimum ||
+        value > maximum) {
+        fprintf(stderr, "error: %s must be in [%u,%u]\n",
+                name, minimum, maximum);
+        exit(EXIT_FAILURE);
+    }
+    return (unsigned)value;
+}
+
+static inline uint64_t parse_u64_arg(const char *name, const char *text)
+{
+    char *end = NULL;
+    uint64_t value;
+    errno = 0;
+#if defined(_MSC_VER)
+    value = _strtoui64(text, &end, 0);
+#else
+    value = strtoull(text, &end, 0);
+#endif
+    if (errno != 0 || end == text || *end != '\0') {
+        fprintf(stderr, "error: invalid %s\n", name);
+        exit(EXIT_FAILURE);
+    }
+    return value;
+}
+
+#if defined(_WIN32)
+typedef HANDLE ThreadHandle;
+typedef DWORD(WINAPI *ThreadProc)(LPVOID);
+#define THREAD_FUNCTION(name) static DWORD WINAPI name(LPVOID opaque)
+#define THREAD_FINISH return 0
+static inline int start_thread(ThreadHandle *handle, ThreadProc proc, void *arg)
+{
+    *handle = CreateThread(NULL, 0, proc, arg, 0, NULL);
+    return *handle == NULL ? -1 : 0;
+}
+static inline int join_thread(ThreadHandle handle)
+{
+    DWORD status = WaitForSingleObject(handle, INFINITE);
+    CloseHandle(handle);
+    return status == WAIT_OBJECT_0 ? 0 : -1;
+}
+#else
+typedef pthread_t ThreadHandle;
+typedef void *(*ThreadProc)(void *);
+#define THREAD_FUNCTION(name) static void *name(void *opaque)
+#define THREAD_FINISH return NULL
+static inline int start_thread(ThreadHandle *handle, ThreadProc proc, void *arg)
+{
+    return pthread_create(handle, NULL, proc, arg);
+}
+static inline int join_thread(ThreadHandle handle)
+{
+    return pthread_join(handle, NULL);
+}
+#endif
+
+static inline void run_threads(ThreadHandle *handles, unsigned count,
+                               ThreadProc proc, void *workers,
+                               size_t worker_size)
+{
+    unsigned started = 0;
+    for (; started < count; ++started) {
+        void *worker = (unsigned char *)workers +
+                       (size_t)started * worker_size;
+        if (start_thread(&handles[started], proc, worker) != 0) break;
+    }
+    if (started != count) {
+        for (unsigned i = 0; i < started; ++i)
+            (void)join_thread(handles[i]);
+        die("thread creation failed");
+    }
+    for (unsigned i = 0; i < count; ++i)
+        if (join_thread(handles[i]) != 0) die("thread join failed");
+}
+
+static inline int separ_cipher_self_test(void)
+{
+    static const uint16_t expected_stream[PROBE_COUNT] = {
+        0xEFC8u, 0x5074u, 0xAEE5u, 0x6EC6u, 0xD241u, 0xE0C1u, 0xD7C1u
+    };
+    static const uint16_t table10_plaintext[8] = {
+        0x156Fu, 0x19E1u, 0x8FE6u, 0x2975u,
+        0x19A3u, 0x52C4u, 0x5731u, 0x536Au
+    };
+    static const uint16_t table10_ciphertext[8] = {
+        0x41E1u, 0x5D76u, 0x9296u, 0x4947u,
+        0x46F6u, 0x38CEu, 0x27FBu, 0x07E9u
+    };
+    int failed = 0;
+
+    printf("[self-test] checking main.c known-answer vector ... ");
+    fflush(stdout);
+    {
+        static const uint16_t zero_iv[8] = {0};
+        SeparCtx ctx;
+        initial_state(DEFAULT_KEY, zero_iv, &ctx);
+        for (unsigned i = 0; i < PROBE_COUNT; ++i) {
+            if (encrypt_word(PROBES[i], &ctx, DEFAULT_KEY) !=
+                expected_stream[i]) {
+                failed = 1;
+                break;
+            }
+        }
+    }
+    printf("%s\n", failed ? "FAIL" : "ok");
+    if (failed) return 1;
+
+    printf("[self-test] checking published Table 10 vector ... ");
+    fflush(stdout);
+    {
+        static const uint16_t zero_iv[8] = {0};
+        SeparCtx ctx;
+        initial_state(DEFAULT_KEY, zero_iv, &ctx);
+        for (unsigned i = 0; i < 8u; ++i) {
+            if (encrypt_word(table10_plaintext[i], &ctx, DEFAULT_KEY) !=
+                table10_ciphertext[i]) {
+                failed = 1;
+                break;
+            }
+        }
+    }
+    printf("%s\n", failed ? "FAIL" : "ok");
+    if (failed) return 1;
+
+    printf("[self-test] checking ENC_Block/DEC_Block inverses ... ");
+    fflush(stdout);
+    for (uint32_t x = 0; x < WORDS; ++x) {
+        uint16_t y = enc_block((uint16_t)x, DEFAULT_KEY[14],
+                               DEFAULT_KEY[15], 8);
+        if (dec_block(y, DEFAULT_KEY[14], DEFAULT_KEY[15], 8) !=
+            (uint16_t)x) {
+            failed = 1;
+            break;
+        }
+    }
+    printf("%s\n", failed ? "FAIL" : "ok");
+    if (failed) return 1;
+
+    printf("[self-test] checking autonomous-lane formula ... ");
+    fflush(stdout);
+    {
+        uint16_t true_nu = lane_tuple_from_pair(DEFAULT_KEY[14],
+                                                DEFAULT_KEY[15]);
+        uint8_t permutation[16];
+        lane_permutation(true_nu, permutation);
+        for (uint32_t x = 0; x < WORDS; ++x) {
+            uint16_t y = enc_block((uint16_t)x, DEFAULT_KEY[14],
+                                   DEFAULT_KEY[15], 8);
+            if (((y >> 8) & 15u) != permutation[(x >> 8) & 15u]) {
+                failed = 1;
+                break;
+            }
+        }
+    }
+    printf("%s\n", failed ? "FAIL" : "ok");
+    return failed;
+}
+
+/* Values passed between the two attack phases inside this translation unit. */
+static uint16_t unified_outer_k8[2];
+static int unified_outer_k8_ready;
+static uint16_t unified_recovered_key[16];
+static int unified_recovered_key_ready;
+
+/*
+ * Deterministic fixed-IV exhaustive-prefix bootstrap for SEPAR K8.
+ * This phase is invoked directly by the unified driver below.
+ */
+
+
+typedef struct {
+    uint64_t score;
+    uint16_t nu;
+} LaneScore;
+
+typedef struct {
+    uint32_t begin;
+    uint32_t end;
+    const SeparCtx *initial;
+    const uint16_t *key;
+    uint64_t lane_edges[LANE_EDGES];
+    uint64_t *byte_edges;
+    uint32_t *full_edges;
+    size_t full_edge_count;
+} QueryWorker;
+
+typedef struct {
+    uint32_t begin;
+    uint32_t end;
+    const uint64_t *lane_edges;
+    LaneScore *scores;
+} LaneWorker;
+
+typedef struct {
+    uint64_t begin;
+    uint64_t end;
+    const uint64_t *byte_edges;
+    const uint16_t *k0_values;
+    const uint16_t *k1_values;
+    size_t k1_count;
+    PairScore *scores;
+} LiftWorker;
+
+typedef struct {
+    size_t begin;
+    size_t end;
+    const EdgeCount *edge_counts;
+    size_t edge_count;
+    const PairScore *high_scores;
+    PairScore *full_scores;
+} FullLiftWorker;
+
+typedef struct {
+    unsigned threads;
+    unsigned top;
+    uint16_t key[16];
+    uint16_t iv[8];
+} Options;
+
+THREAD_FUNCTION(query_worker_main)
+{
+    QueryWorker *worker = (QueryWorker *)opaque;
+    for (uint32_t prefix = worker->begin; prefix < worker->end; ++prefix) {
+        SeparCtx after_prefix = *worker->initial;
+        uint16_t outputs[PROBE_COUNT];
+        encrypt_word((uint16_t)prefix, &after_prefix, worker->key);
+        for (unsigned qi = 0; qi < PROBE_COUNT; ++qi) {
+            SeparCtx second = after_prefix;
+            outputs[qi] = encrypt_word(PROBES[qi], &second, worker->key);
+        }
+        for (unsigned di = 1; di < PROBE_COUNT; ++di) {
+            uint8_t a8 = (uint8_t)(outputs[0] >> 8);
+            uint8_t b8 = (uint8_t)(outputs[di] >> 8);
+            uint8_t a4 = (uint8_t)(a8 & 15u);
+            uint8_t b4 = (uint8_t)(b8 & 15u);
+            worker->lane_edges[((unsigned)a4 << 4) | b4]++;
+            worker->byte_edges[((unsigned)a8 << 8) | b8]++;
+            worker->full_edges[worker->full_edge_count++] =
+                ((uint32_t)outputs[0] << 16) | outputs[di];
+        }
+    }
+    THREAD_FINISH;
+}
+
+THREAD_FUNCTION(lane_worker_main)
+{
+    LaneWorker *worker = (LaneWorker *)opaque;
+    for (uint32_t value = worker->begin; value < worker->end; ++value) {
+        uint8_t permutation[16];
+        uint64_t score = 0;
+        lane_permutation((uint16_t)value, permutation);
+        for (unsigned b = 0; b < 16u; ++b) {
+            uint8_t from = permutation[b];
+            uint8_t to = permutation[(b + 1u) & 15u];
+            score += worker->lane_edges[((unsigned)from << 4) | to];
+        }
+        worker->scores[value].score = score;
+        worker->scores[value].nu = (uint16_t)value;
+    }
+    THREAD_FINISH;
+}
+
+THREAD_FUNCTION(lift_worker_main)
+{
+    LiftWorker *worker = (LiftWorker *)opaque;
+    for (uint64_t index = worker->begin; index < worker->end; ++index) {
+        size_t i0 = (size_t)(index / worker->k1_count);
+        size_t i1 = (size_t)(index % worker->k1_count);
+        uint16_t k0 = worker->k0_values[i0];
+        uint16_t k1 = worker->k1_values[i1];
+        uint8_t quotient[256];
+        uint64_t score = 0;
+        for (unsigned h = 0; h < 256u; ++h) {
+            quotient[h] = (uint8_t)(enc_block((uint16_t)(h << 8), k0, k1, 8) >> 8);
+        }
+        for (unsigned h = 0; h < 256u; ++h) {
+            uint8_t from = quotient[h];
+            uint8_t to = quotient[(h + 1u) & 255u];
+            score += worker->byte_edges[((unsigned)from << 8) | to];
+        }
+        worker->scores[index].score = score;
+        worker->scores[index].k0 = k0;
+        worker->scores[index].k1 = k1;
+    }
+    THREAD_FINISH;
+}
+
+THREAD_FUNCTION(full_lift_worker_main)
+{
+    FullLiftWorker *worker = (FullLiftWorker *)opaque;
+    for (size_t index = worker->begin; index < worker->end; ++index) {
+        uint16_t k0 = worker->high_scores[index].k0;
+        uint16_t k1 = worker->high_scores[index].k1;
+        uint16_t first = enc_block(0, k0, k1, 8);
+        uint16_t previous = first;
+        uint64_t score = 0;
+        for (uint32_t x = 0; x < WORDS - 1u; ++x) {
+            uint16_t next = enc_block((uint16_t)(x + 1u), k0, k1, 8);
+            uint32_t edge = ((uint32_t)previous << 16) | next;
+            score += edge_multiplicity(worker->edge_counts, worker->edge_count, edge);
+            previous = next;
+        }
+        score += edge_multiplicity(worker->edge_counts, worker->edge_count,
+                                   ((uint32_t)previous << 16) | first);
+        worker->full_scores[index].score = score;
+        worker->full_scores[index].k0 = k0;
+        worker->full_scores[index].k1 = k1;
+    }
+    THREAD_FINISH;
+}
+
+static int lane_score_compare(const void *left, const void *right)
+{
+    const LaneScore *a = (const LaneScore *)left;
+    const LaneScore *b = (const LaneScore *)right;
+    if (a->score != b->score) return a->score > b->score ? -1 : 1;
+    if (a->nu != b->nu) return a->nu < b->nu ? -1 : 1;
+    return 0;
+}
+
+static int pair_score_compare(const void *left, const void *right)
+{
+    const PairScore *a = (const PairScore *)left;
+    const PairScore *b = (const PairScore *)right;
+    if (a->score != b->score) return a->score > b->score ? -1 : 1;
+    if (a->k0 != b->k0) return a->k0 < b->k0 ? -1 : 1;
+    if (a->k1 != b->k1) return a->k1 < b->k1 ? -1 : 1;
+    return 0;
+}
+
+static int u64_compare(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *)left;
+    uint64_t b = *(const uint64_t *)right;
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static int self_test_lane_injectivity(void)
+{
+    uint64_t *permutations = (uint64_t *)malloc(WORDS * sizeof(*permutations));
+    if (permutations == NULL) die("self-test allocation failed");
+    for (uint32_t nu = 0; nu < WORDS; ++nu) {
+        uint8_t permutation[16];
+        uint64_t packed = 0;
+        lane_permutation((uint16_t)nu, permutation);
+        for (unsigned b = 0; b < 16u; ++b) packed |= (uint64_t)permutation[b] << (4u * b);
+        permutations[nu] = packed;
+    }
+    qsort(permutations, WORDS, sizeof(*permutations), u64_compare);
+    for (uint32_t i = 1; i < WORDS; ++i) {
+        if (permutations[i - 1u] == permutations[i]) {
+            free(permutations);
+            return 1;
+        }
+    }
+    free(permutations);
+    return 0;
+}
+
+static int outer_phase_run(const uint16_t demo_key[16],
+                           const uint16_t fixed_iv[8],
+                           unsigned thread_count)
+{
+    Options options;
+    options.threads = thread_count;
+    options.top = 1u;
+    memcpy(options.key, demo_key, sizeof(options.key));
+    memcpy(options.iv, fixed_iv, sizeof(options.iv));
+
+    SeparCtx initial;
+    QueryWorker *query_workers;
+    LaneWorker *lane_workers;
+    ThreadHandle *handles;
+    LaneScore *lane_scores;
+    uint64_t lane_edges[LANE_EDGES] = {0};
+    uint64_t *byte_edges;
+    uint32_t *raw_full_edges;
+    EdgeCount *full_edge_counts;
+    size_t raw_full_edge_count = 0;
+    size_t full_edge_count = 0;
+    size_t lane_global_max_count = 0;
+    size_t selected_lane_start = 0;
+    size_t selected_lane_count = 0;
+    uint64_t attack_start = now_ns();
+    uint64_t phase_start;
+
+    initial_state(options.key, options.iv, &initial);
+    printf("SEPAR deterministic exhaustive-prefix K8 bootstrap\n");
+    printf("threads=%u prefixes=65536 probes={0,1,2,4,8,15,16}\n", options.threads);
+    printf("oracle_messages=458752 logical_word_encryptions=917504 optimized_word_encryptions=524288\n");
+
+    handles = (ThreadHandle *)calloc(options.threads, sizeof(*handles));
+    query_workers = (QueryWorker *)calloc(options.threads, sizeof(*query_workers));
+    lane_workers = (LaneWorker *)calloc(options.threads, sizeof(*lane_workers));
+    lane_scores = (LaneScore *)malloc(WORDS * sizeof(*lane_scores));
+    byte_edges = (uint64_t *)calloc(BYTE_EDGES, sizeof(*byte_edges));
+    raw_full_edges = (uint32_t *)malloc((size_t)WORDS * DIFF_COUNT * sizeof(*raw_full_edges));
+    full_edge_counts = (EdgeCount *)malloc((size_t)WORDS * DIFF_COUNT * sizeof(*full_edge_counts));
+    if (handles == NULL || query_workers == NULL || lane_workers == NULL ||
+        lane_scores == NULL || byte_edges == NULL || raw_full_edges == NULL ||
+        full_edge_counts == NULL) die("allocation failed");
+
+    phase_start = now_ns();
+    for (unsigned t = 0; t < options.threads; ++t) {
+        query_workers[t].begin = (uint32_t)(((uint64_t)WORDS * t) / options.threads);
+        query_workers[t].end = (uint32_t)(((uint64_t)WORDS * (t + 1u)) / options.threads);
+        query_workers[t].initial = &initial;
+        query_workers[t].key = options.key;
+        query_workers[t].byte_edges = (uint64_t *)calloc(BYTE_EDGES, sizeof(uint64_t));
+        query_workers[t].full_edges = (uint32_t *)malloc(
+            (size_t)(query_workers[t].end - query_workers[t].begin) * DIFF_COUNT * sizeof(uint32_t));
+        if (query_workers[t].byte_edges == NULL || query_workers[t].full_edges == NULL) {
+            die("query-worker edge allocation failed");
+        }
+    }
+    run_threads(handles, options.threads, query_worker_main, query_workers, sizeof(*query_workers));
+    for (unsigned t = 0; t < options.threads; ++t) {
+        for (unsigned e = 0; e < LANE_EDGES; ++e) lane_edges[e] += query_workers[t].lane_edges[e];
+        for (unsigned e = 0; e < BYTE_EDGES; ++e) byte_edges[e] += query_workers[t].byte_edges[e];
+        memcpy(raw_full_edges + raw_full_edge_count, query_workers[t].full_edges,
+               query_workers[t].full_edge_count * sizeof(uint32_t));
+        raw_full_edge_count += query_workers[t].full_edge_count;
+        free(query_workers[t].full_edges);
+        free(query_workers[t].byte_edges);
+    }
+    qsort(raw_full_edges, raw_full_edge_count, sizeof(*raw_full_edges), uint32_compare);
+    for (size_t i = 0; i < raw_full_edge_count;) {
+        size_t j = i + 1u;
+        while (j < raw_full_edge_count && raw_full_edges[j] == raw_full_edges[i]) ++j;
+        full_edge_counts[full_edge_count].key = raw_full_edges[i];
+        full_edge_counts[full_edge_count].count = (uint32_t)(j - i);
+        ++full_edge_count;
+        i = j;
+    }
+    printf("phase=query+aggregate elapsed=%.3f s edges=%u\n",
+           (double)(now_ns() - phase_start) / 1e9, WORDS * DIFF_COUNT);
+
+    phase_start = now_ns();
+    for (unsigned t = 0; t < options.threads; ++t) {
+        lane_workers[t].begin = (uint32_t)(((uint64_t)WORDS * t) / options.threads);
+        lane_workers[t].end = (uint32_t)(((uint64_t)WORDS * (t + 1u)) / options.threads);
+        lane_workers[t].lane_edges = lane_edges;
+        lane_workers[t].scores = lane_scores;
+    }
+    run_threads(handles, options.threads, lane_worker_main, lane_workers, sizeof(*lane_workers));
+    qsort(lane_scores, WORDS, sizeof(*lane_scores), lane_score_compare);
+    lane_global_max_count = 1u;
+    while (lane_global_max_count < WORDS &&
+           lane_scores[lane_global_max_count].score == lane_scores[0].score) {
+        ++lane_global_max_count;
+    }
+    selected_lane_start = 0u;
+    selected_lane_count = lane_global_max_count;
+    {
+        printf("phase=lane-enumeration elapsed=%.3f s candidates=65536 "
+               "global_maximizers=%zu\n",
+               (double)(now_ns() - phase_start) / 1e9,
+               lane_global_max_count);
+        printf("selected_lane_start_rank=%zu selected_lane_count=%zu\n",
+               selected_lane_start + 1u, selected_lane_count);
+        for (unsigned i = 0; i < options.top; ++i) {
+            printf("lane[%u] nu=%04X score=%" PRIu64 "\n", i + 1u,
+                   lane_scores[i].nu, lane_scores[i].score);
+        }
+    }
+
+    {
+        uint16_t *k0_values = (uint16_t *)malloc(WORDS * sizeof(uint16_t));
+        uint16_t *k1_values = (uint16_t *)malloc(WORDS * sizeof(uint16_t));
+        uint64_t pair_count = 0u;
+        PairScore *pair_scores;
+        LiftWorker *lift_workers;
+        FullLiftWorker *full_lift_workers;
+        if (k0_values == NULL || k1_values == NULL) die("lift-list allocation failed");
+        for (size_t lane_offset = 0; lane_offset < selected_lane_count;
+             ++lane_offset) {
+            size_t lane_index = selected_lane_start + lane_offset;
+            uint16_t nu = lane_scores[lane_index].nu;
+            size_t k0_count = collect_word_candidates(
+                (uint8_t)(nu & 15u), (uint8_t)((nu >> 8) & 15u),
+                1, k0_values);
+            size_t k1_count = collect_word_candidates(
+                (uint8_t)((nu >> 4) & 15u),
+                (uint8_t)((nu >> 12) & 15u), 0, k1_values);
+            uint64_t lane_pair_count =
+                (uint64_t)k0_count * (uint64_t)k1_count;
+            if (UINT64_MAX - pair_count < lane_pair_count) {
+                die("lift candidate count overflow");
+            }
+            pair_count += lane_pair_count;
+            if (selected_lane_count == 1u) {
+                printf("lift_lane=%04X k0_candidates=%zu k1_candidates=%zu "
+                       "pair_candidates=%" PRIu64 "\n",
+                       nu, k0_count, k1_count, lane_pair_count);
+            }
+        }
+        if (pair_count == 0 || pair_count > SIZE_MAX / sizeof(PairScore)) die("invalid lift candidate count");
+        pair_scores = (PairScore *)malloc((size_t)pair_count * sizeof(*pair_scores));
+        lift_workers = (LiftWorker *)calloc(options.threads, sizeof(*lift_workers));
+        full_lift_workers = (FullLiftWorker *)calloc(options.threads, sizeof(*full_lift_workers));
+        if (pair_scores == NULL || lift_workers == NULL || full_lift_workers == NULL) {
+            die("lift-score allocation failed");
+        }
+        if (selected_lane_count != 1u) {
+            printf("lift_lanes=%zu first_lane=%04X pair_candidates=%" PRIu64 "\n",
+                   selected_lane_count, lane_scores[selected_lane_start].nu,
+                   pair_count);
+        }
+        phase_start = now_ns();
+        {
+            uint64_t pair_offset = 0u;
+            for (size_t lane_offset = 0; lane_offset < selected_lane_count;
+                 ++lane_offset) {
+                size_t lane_index = selected_lane_start + lane_offset;
+                uint16_t nu = lane_scores[lane_index].nu;
+                size_t k0_count = collect_word_candidates(
+                    (uint8_t)(nu & 15u),
+                    (uint8_t)((nu >> 8) & 15u), 1, k0_values);
+                size_t k1_count = collect_word_candidates(
+                    (uint8_t)((nu >> 4) & 15u),
+                    (uint8_t)((nu >> 12) & 15u), 0, k1_values);
+                uint64_t lane_pair_count =
+                    (uint64_t)k0_count * (uint64_t)k1_count;
+                for (unsigned t = 0; t < options.threads; ++t) {
+                    lift_workers[t].begin =
+                        (lane_pair_count * t) / options.threads;
+                    lift_workers[t].end =
+                        (lane_pair_count * (t + 1u)) / options.threads;
+                    lift_workers[t].byte_edges = byte_edges;
+                    lift_workers[t].k0_values = k0_values;
+                    lift_workers[t].k1_values = k1_values;
+                    lift_workers[t].k1_count = k1_count;
+                    lift_workers[t].scores = pair_scores + (size_t)pair_offset;
+                }
+                run_threads(handles, options.threads, lift_worker_main,
+                            lift_workers, sizeof(*lift_workers));
+                pair_offset += lane_pair_count;
+            }
+            if (pair_offset != pair_count) die("lift candidate count changed");
+        }
+        qsort(pair_scores, (size_t)pair_count, sizeof(*pair_scores), pair_score_compare);
+        {
+            printf("phase=high-byte-lift elapsed=%.3f s\n",
+                   (double)(now_ns() - phase_start) / 1e9);
+            for (unsigned i = 0; i < options.top && i < pair_count; ++i) {
+                printf("K8-high[%u]=(%04X,%04X) score=%" PRIu64 "\n", i + 1u,
+                       pair_scores[i].k0, pair_scores[i].k1, pair_scores[i].score);
+            }
+        }
+        {
+            size_t global_max_count = 1u;
+            size_t full_count;
+            while (global_max_count < (size_t)pair_count &&
+                   pair_scores[global_max_count].score == pair_scores[0].score) {
+                ++global_max_count;
+            }
+            full_count = global_max_count;
+            PairScore *full_scores =
+                (PairScore *)malloc(full_count * sizeof(*full_scores));
+            if (full_scores == NULL) die("full-lift allocation failed");
+            phase_start = now_ns();
+            for (unsigned t = 0; t < options.threads; ++t) {
+                full_lift_workers[t].begin =
+                    (size_t)(((uint64_t)full_count * t) / options.threads);
+                full_lift_workers[t].end =
+                    (size_t)(((uint64_t)full_count * (t + 1u)) /
+                             options.threads);
+                full_lift_workers[t].edge_counts = full_edge_counts;
+                full_lift_workers[t].edge_count = full_edge_count;
+                full_lift_workers[t].high_scores = pair_scores;
+                full_lift_workers[t].full_scores = full_scores;
+            }
+            run_threads(handles, options.threads, full_lift_worker_main,
+                        full_lift_workers, sizeof(*full_lift_workers));
+            qsort(full_scores, full_count, sizeof(*full_scores),
+                  pair_score_compare);
+            {
+                size_t full_global_max_count = 1u;
+                while (full_global_max_count < full_count &&
+                       full_scores[full_global_max_count].score == full_scores[0].score) {
+                    ++full_global_max_count;
+                }
+                printf("phase=full-block-lift elapsed=%.3f s high_global_maximizers=%zu full_candidates=%zu full_global_maximizers=%zu unique_observed_edges=%zu\n",
+                       (double)(now_ns() - phase_start) / 1e9,
+                       global_max_count, full_count,
+                       full_global_max_count, full_edge_count);
+                for (unsigned i = 0; i < options.top && i < full_count; ++i) {
+                    printf("K8-full[%u]=(%04X,%04X) score=%" PRIu64 "\n", i + 1u,
+                           full_scores[i].k0, full_scores[i].k1, full_scores[i].score);
+                }
+                unified_outer_k8[0] = full_scores[0].k0;
+                unified_outer_k8[1] = full_scores[0].k1;
+                unified_outer_k8_ready = 1;
+                for (size_t i = 0; i < full_global_max_count; ++i) {
+                    printf("candidate_K8=(%04X,%04X) score=%" PRIu64 "\n",
+                           full_scores[i].k0, full_scores[i].k1, full_scores[i].score);
+                }
+                printf("OUTER_SELECTED_K8=%04X%04X\n",
+                       full_scores[0].k0, full_scores[0].k1);
+            }
+            free(full_scores);
+        }
+        free(full_lift_workers);
+        free(lift_workers);
+        free(pair_scores);
+        free(k1_values);
+        free(k0_values);
+    }
+
+    printf("total_elapsed=%.3f s\n", (double)(now_ns() - attack_start) / 1e9);
+    free(full_edge_counts);
+    free(raw_full_edges);
+    free(byte_edges);
+    free(lane_scores);
+    free(lane_workers);
+    free(query_workers);
+    free(handles);
+    return EXIT_SUCCESS;
+}
+
+/*
  * Exact-filtered ranked inward key recovery for the implemented SEPAR cipher.
  *
- * This is phase two of the PoC.  separ_prefix_attack orders K8 candidates;
- * pass one with --known-k8.  Scores only order finite candidate sets.  A
+ * This is phase two of the PoC.  The outer phase passes its selected K8
+ * candidate directly to this search.  Scores only order finite sets.  A
  * bounded miss is reported as INCONCLUSIVE.  Zero for every tier budget is
  * the exhaustive traversal described in the paper (normally impractical).
  *
- * --oracle-key is used solely by the local chosen-plaintext oracle and, when
- * --audit is present, to print truth ranks.  Acceptance never compares keys:
+ * The demo key is used solely by the local chosen-plaintext oracle.  Acceptance
+ * never compares keys:
  * the first key consistent with the finite public transcript is returned.
  */
-#include "separ_common.h"
 
 typedef struct {
     uint16_t k0;
@@ -91,7 +1111,6 @@ typedef struct {
     int audit;
     uint16_t oracle_key[16];
     KeyPair known_k8;
-    int have_known_k8;
 } AttackOptions;
 
 typedef struct {
@@ -151,80 +1170,21 @@ typedef struct {
     uint64_t start_ns;
 } Search;
 
-static void inward_usage(const char *program)
-{
-    printf("usage: %s --known-k8 HEX8 [options]\n", program);
-    puts("  --oracle-key HEX64  local oracle secret (default: published key)");
-    puts("  --known-k8 HEX8     candidate supplied by the outer bootstrap");
-    puts("  --threads N         worker threads, 1..256");
-    puts("  --contexts N        deterministic reset codebooks, 1..16 (default 8)");
-    puts("  --seed N            deterministic IV-family seed (default 1)");
-    puts("  --lane-tiers N      S4 score tiers per stage; 0 means exhaustive");
-    puts("  --pair-tiers N      S8 score tiers per lane; 0 means exhaustive");
-    puts("  --state-tiers N    joint exact-admissible state-word tiers; 0 means exhaustive");
-    puts("  --audit             print truth ranks; never used for selection");
-    puts("  --complete          set all three tier budgets to zero");
-    puts("  --self-test         cipher, pivot, carry-bound, and factor tests");
-    puts("\nA bounded failure is INCONCLUSIVE, never a recovery claim.");
-    puts("Acceptance returns the first transcript-consistent representative;");
-    puts("numeric equality to the oracle key is reported only by --audit.");
-}
-
-static AttackOptions inward_options(int argc, char **argv, int *self_test)
+static AttackOptions inward_defaults(const uint16_t oracle_key[16],
+                                     KeyPair known_k8,
+                                     unsigned thread_count)
 {
     AttackOptions opt;
-    int complete = 0;
     memset(&opt, 0, sizeof(opt));
-    memcpy(opt.oracle_key, DEFAULT_KEY, sizeof(DEFAULT_KEY));
-    opt.threads = detected_threads();
+    memcpy(opt.oracle_key, oracle_key, sizeof(opt.oracle_key));
+    opt.threads = thread_count;
     if (opt.threads > 16u) opt.threads = 16u;
     opt.contexts = DEFAULT_CONTEXTS;
     opt.lane_tiers = 1u;
     opt.pair_tiers = 1u;
     opt.state_tiers = 1u;
     opt.seed = 1u;
-    *self_test = 0;
-    for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            inward_usage(argv[0]);
-            exit(EXIT_SUCCESS);
-        } else if (strcmp(argv[i], "--oracle-key") == 0 && i + 1 < argc) {
-            if (parse_hex_words(argv[++i], opt.oracle_key, 16u) != 0)
-                die("invalid --oracle-key");
-        } else if (strcmp(argv[i], "--known-k8") == 0 && i + 1 < argc) {
-            uint16_t words[2];
-            if (parse_hex_words(argv[++i], words, 2u) != 0)
-                die("invalid --known-k8");
-            opt.known_k8.k0 = words[0];
-            opt.known_k8.k1 = words[1];
-            opt.have_known_k8 = 1;
-        } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
-            opt.threads = parse_unsigned_arg("--threads", argv[++i], 1u, 256u);
-        } else if (strcmp(argv[i], "--contexts") == 0 && i + 1 < argc) {
-            opt.contexts = parse_unsigned_arg("--contexts", argv[++i], 1u, MAX_CONTEXTS);
-        } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
-            opt.seed = parse_u64_arg("--seed", argv[++i]);
-        } else if (strcmp(argv[i], "--lane-tiers") == 0 && i + 1 < argc) {
-            opt.lane_tiers = parse_unsigned_arg("--lane-tiers", argv[++i], 0u, UINT_MAX);
-        } else if (strcmp(argv[i], "--pair-tiers") == 0 && i + 1 < argc) {
-            opt.pair_tiers = parse_unsigned_arg("--pair-tiers", argv[++i], 0u, UINT_MAX);
-        } else if (strcmp(argv[i], "--state-tiers") == 0 && i + 1 < argc) {
-            opt.state_tiers = parse_unsigned_arg("--state-tiers", argv[++i], 0u, UINT_MAX);
-        } else if (strcmp(argv[i], "--audit") == 0) {
-            opt.audit = 1;
-        } else if (strcmp(argv[i], "--complete") == 0) {
-            complete = 1;
-        } else if (strcmp(argv[i], "--self-test") == 0) {
-            *self_test = 1;
-        } else {
-            inward_usage(argv[0]);
-            die("unknown or incomplete option");
-        }
-    }
-    if (complete)
-        opt.lane_tiers = opt.pair_tiers = opt.state_tiers = 0u;
-    if (!*self_test && !opt.have_known_k8)
-        die("--known-k8 is required (run separ_prefix_attack first)");
+    opt.known_k8 = known_k8;
     return opt;
 }
 
@@ -1070,6 +2030,8 @@ static int verify_recovered(Search *search)
         }
     }
 
+    memcpy(unified_recovered_key, candidate, sizeof(candidate));
+    unified_recovered_key_ready = 1;
     printf("VERIFICATION=PASS codebooks=%ux65536 held_out=2x64 "
            "reconstructed_initialization_contexts=%u retired_contexts=%u\n",
            search->opt->contexts, search->active_count,
@@ -1443,8 +2405,6 @@ static int inward_self_test(const AttackOptions *opt)
     SeparCtx initialized;
     uint16_t *root, *current, *next;
     unsigned bounds[4];
-    int status = separ_cipher_self_test();
-    if (status != 0) return status;
     deterministic_iv(1u, 1u, iv);
     if (iv[0] != 0x5CC1u || iv[1] != 0xEC67u ||
         iv[7] != 0x8575u) {
@@ -1573,14 +2533,12 @@ static int inward_self_test(const AttackOptions *opt)
     return 0;
 }
 
-int main(int argc, char **argv)
+static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
+                            unsigned thread_count)
 {
-    int self_test;
     int found;
-    AttackOptions opt = inward_options(argc, argv, &self_test);
+    AttackOptions opt = inward_defaults(oracle_key, known_k8, thread_count);
     Search search;
-    if (self_test)
-        return inward_self_test(&opt) ? EXIT_FAILURE : EXIT_SUCCESS;
 
     memset(&search, 0, sizeof(search));
     search.opt = &opt;
@@ -1589,7 +2547,7 @@ int main(int argc, char **argv)
     search.pairs[8] = opt.known_k8;
     search.start_ns = now_ns();
     printf("SEPAR ranked inward recovery\n");
-    printf("K8_SOURCE=external candidate=%04X%04X contexts=%u threads=%u "
+    printf("K8_SOURCE=outer candidate=%04X%04X contexts=%u threads=%u "
            "seed=%" PRIu64 "\n", opt.known_k8.k0, opt.known_k8.k1,
            opt.contexts, opt.threads, opt.seed);
     printf("BUDGETS lane=%u pair=%u state=%u (0=exhaustive)\n",
@@ -1638,4 +2596,74 @@ int main(int argc, char **argv)
         free(search.verification_tables[c]);
     }
     return found ? EXIT_SUCCESS : 2;
+}
+
+
+static void unified_usage(const char *program)
+{
+    fprintf(stderr, "usage: %s HEX64\n", program);
+    fprintf(stderr, "       %s --self-test\n", program);
+}
+
+int main(int argc, char **argv)
+{
+    static const uint16_t outer_iv[8] = {
+        0x5CC1u, 0xEC67u, 0x555Eu, 0xC90Bu,
+        0xB5B9u, 0x0280u, 0x3CA5u, 0x8575u
+    };
+    uint16_t demo_key[16];
+    KeyPair selected_k8;
+    unsigned threads = detected_threads();
+    int status;
+    if (threads > 16u) threads = 16u;
+
+    if (argc == 2 && strcmp(argv[1], "--self-test") == 0) {
+        AttackOptions opt;
+        KeyPair default_k8 = {DEFAULT_KEY[14], DEFAULT_KEY[15]};
+        status = separ_cipher_self_test();
+        if (status == 0) {
+            printf("[self-test] completing injectivity check ... ");
+            fflush(stdout);
+            status = self_test_lane_injectivity();
+            printf("%s\n", status ? "FAIL" : "ok");
+        }
+        if (status != 0) return EXIT_FAILURE;
+        opt = inward_defaults(DEFAULT_KEY, default_k8, threads);
+        return inward_self_test(&opt) ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+    if (argc != 2 || parse_hex_words(argv[1], demo_key, 16u) != 0) {
+        unified_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    printf("SEPAR unified key-recovery demonstration\n");
+    printf("MODE=repeated-reset chosen-IV outer_lanes=1 "
+           "inward_tiers=1/1/1 contexts=8 threads=%u\n", threads);
+
+    unified_outer_k8_ready = 0;
+    status = outer_phase_run(demo_key, outer_iv, threads);
+    if (status != EXIT_SUCCESS || !unified_outer_k8_ready) {
+        fprintf(stderr, "RESULT=ERROR phase=outer\n");
+        return EXIT_FAILURE;
+    }
+
+    selected_k8.k0 = unified_outer_k8[0];
+    selected_k8.k1 = unified_outer_k8[1];
+    printf("\nPHASE_HANDOFF K8=%04X%04X source=outer-transcript-ranking\n",
+           selected_k8.k0, selected_k8.k1);
+
+    unified_recovered_key_ready = 0;
+    status = inward_phase_run(demo_key, selected_k8, threads);
+
+    if (status == EXIT_SUCCESS && unified_recovered_key_ready) {
+        printf("DEMO_EXACT=%s\n",
+               memcmp(unified_recovered_key, demo_key, sizeof(demo_key)) == 0
+                   ? "PASS" : "TRANSCRIPT_EQUIVALENT");
+        printf("FULL_ATTACK_RESULT=SUCCESS\n");
+        return EXIT_SUCCESS;
+    }
+
+    printf("FULL_ATTACK_RESULT=INCONCLUSIVE\n");
+    return status == 2 ? 2 : EXIT_FAILURE;
 }

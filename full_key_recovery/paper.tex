@@ -178,7 +178,7 @@ therefore depends on an interface that permits nonce reuse or arbitrary state
 reset.  No decryption oracle is needed.  The outer experiment uses
 two-word messages; inward recovery uses complete reset one-word codebooks at
 a deterministic public IV family.  Two stateful 64-word messages are reserved
-for verification.  The proof-of-concept programs contain a local oracle; the
+for verification.  The proof-of-concept program contains a local oracle; the
 secret is used to generate replies and, when requested, to report experimental
 ranks, but it does not enter a search or acceptance decision.
 
@@ -1032,14 +1032,19 @@ is an empirical quantity.
 \section{Experimental evaluation}
 \label{sec:experiments}
 
-The proof of concept consists of two portable threaded C programs, one for the
-last-stage prefix experiment and one for inward recovery.  Their shared cipher
-core is a literal implementation of the reference operations.  Self-tests
+The proof of concept is a single portable threaded C program that runs the
+last-stage prefix experiment and passes its selected candidate directly to
+inward recovery.  Its cipher core is a literal implementation of the reference
+operations.  Self-tests
 check the published stream, block inversion, the lane formula and exhaustive
 lane injectivity, the optimized carry computation against a direct reference,
 pivot induction, and the stage-one factor test.  A bounded search that exhausts
 its configured tiers reports \code{INCONCLUSIVE}, rather than claiming
 failure of the full attack.
+
+The 100-key evaluation below timed the outer and inward phases separately so
+that their ranking behaviour could be distinguished.  The artifact's unified
+entry point invokes the same two routines in sequence for a complete demo.
 
 We evaluated 100 independently generated 256-bit keys, fixed before the runs.
 The inward experiment used eight deterministic IV contexts, seed one, a
@@ -1149,7 +1154,7 @@ stages.  A 16-bit external permutation also makes complete codebooks cheap, so
 enlarging only the internal state is not sufficient.  Statistical output tests
 cannot substitute for this structural analysis.
 
-The accompanying artifact contains the two C programs, the reference cipher
+The accompanying artifact contains the unified C program, the reference cipher
 source, the complete 100-key result table, and representative execution logs.
 
 \appendix
