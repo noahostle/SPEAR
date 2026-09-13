@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -562,6 +563,50 @@ static uint16_t unified_outer_k8[2];
 static int unified_outer_k8_ready;
 static uint16_t unified_recovered_key[16];
 static int unified_recovered_key_ready;
+static int debug_output;
+static int progress_line_active;
+
+static void debug_printf(const char *format, ...)
+{
+    va_list arguments;
+    if (!debug_output) return;
+    va_start(arguments, format);
+    vprintf(format, arguments);
+    va_end(arguments);
+}
+
+static void progress_bar(unsigned stage, unsigned percent,
+                         const char *activity)
+{
+    enum { BAR_WIDTH = 32 };
+    unsigned filled;
+    if (debug_output) return;
+    if (percent > 100u) percent = 100u;
+    filled = percent * BAR_WIDTH / 100u;
+    printf("\rStage K%u %-14s [", stage, activity);
+    for (unsigned i = 0; i < BAR_WIDTH; ++i)
+        putchar(i < filled ? '#' : '-');
+    printf("] %3u%%", percent);
+    fflush(stdout);
+    progress_line_active = 1;
+}
+
+static void finish_progress_line(void)
+{
+    if (debug_output || !progress_line_active) return;
+    putchar('\n');
+    fflush(stdout);
+    progress_line_active = 0;
+}
+
+static void print_recovered_segment(unsigned stage, uint16_t k0,
+                                    uint16_t k1)
+{
+    if (debug_output) return;
+    finish_progress_line();
+    printf("Recovered K%u: %04X%04X\n", stage, k0, k1);
+    fflush(stdout);
+}
 
 /*
  * Deterministic fixed-IV exhaustive-prefix bootstrap for SEPAR K8.
@@ -786,9 +831,9 @@ static int outer_phase_run(const uint16_t demo_key[16],
     uint64_t phase_start;
 
     initial_state(options.key, options.iv, &initial);
-    printf("SEPAR deterministic exhaustive-prefix K8 bootstrap\n");
-    printf("threads=%u prefixes=65536 probes={0,1,2,4,8,15,16}\n", options.threads);
-    printf("oracle_messages=458752 logical_word_encryptions=917504 optimized_word_encryptions=524288\n");
+    debug_printf("SEPAR deterministic exhaustive-prefix K8 bootstrap\n");
+    debug_printf("threads=%u prefixes=65536 probes={0,1,2,4,8,15,16}\n", options.threads);
+    debug_printf("oracle_messages=458752 logical_word_encryptions=917504 optimized_word_encryptions=524288\n");
 
     handles = (ThreadHandle *)calloc(options.threads, sizeof(*handles));
     query_workers = (QueryWorker *)calloc(options.threads, sizeof(*query_workers));
@@ -833,8 +878,10 @@ static int outer_phase_run(const uint16_t demo_key[16],
         ++full_edge_count;
         i = j;
     }
-    printf("phase=query+aggregate elapsed=%.3f s edges=%u\n",
-           (double)(now_ns() - phase_start) / 1e9, WORDS * DIFF_COUNT);
+    debug_printf("phase=query+aggregate elapsed=%.3f s edges=%u\n",
+                 (double)(now_ns() - phase_start) / 1e9,
+                 WORDS * DIFF_COUNT);
+    progress_bar(8u, 4u, "lane ranking");
 
     phase_start = now_ns();
     for (unsigned t = 0; t < options.threads; ++t) {
@@ -853,16 +900,17 @@ static int outer_phase_run(const uint16_t demo_key[16],
     selected_lane_start = 0u;
     selected_lane_count = lane_global_max_count;
     {
-        printf("phase=lane-enumeration elapsed=%.3f s candidates=65536 "
-               "global_maximizers=%zu\n",
-               (double)(now_ns() - phase_start) / 1e9,
-               lane_global_max_count);
-        printf("selected_lane_start_rank=%zu selected_lane_count=%zu\n",
-               selected_lane_start + 1u, selected_lane_count);
+        debug_printf("phase=lane-enumeration elapsed=%.3f s candidates=65536 "
+                     "global_maximizers=%zu\n",
+                     (double)(now_ns() - phase_start) / 1e9,
+                     lane_global_max_count);
+        debug_printf("selected_lane_start_rank=%zu selected_lane_count=%zu\n",
+                     selected_lane_start + 1u, selected_lane_count);
         for (unsigned i = 0; i < options.top; ++i) {
-            printf("lane[%u] nu=%04X score=%" PRIu64 "\n", i + 1u,
-                   lane_scores[i].nu, lane_scores[i].score);
+            debug_printf("lane[%u] nu=%04X score=%" PRIu64 "\n", i + 1u,
+                         lane_scores[i].nu, lane_scores[i].score);
         }
+        progress_bar(8u, 7u, "byte lift");
     }
 
     {
@@ -890,9 +938,9 @@ static int outer_phase_run(const uint16_t demo_key[16],
             }
             pair_count += lane_pair_count;
             if (selected_lane_count == 1u) {
-                printf("lift_lane=%04X k0_candidates=%zu k1_candidates=%zu "
-                       "pair_candidates=%" PRIu64 "\n",
-                       nu, k0_count, k1_count, lane_pair_count);
+                debug_printf("lift_lane=%04X k0_candidates=%zu k1_candidates=%zu "
+                             "pair_candidates=%" PRIu64 "\n",
+                             nu, k0_count, k1_count, lane_pair_count);
             }
         }
         if (pair_count == 0 || pair_count > SIZE_MAX / sizeof(PairScore)) die("invalid lift candidate count");
@@ -903,9 +951,9 @@ static int outer_phase_run(const uint16_t demo_key[16],
             die("lift-score allocation failed");
         }
         if (selected_lane_count != 1u) {
-            printf("lift_lanes=%zu first_lane=%04X pair_candidates=%" PRIu64 "\n",
-                   selected_lane_count, lane_scores[selected_lane_start].nu,
-                   pair_count);
+            debug_printf("lift_lanes=%zu first_lane=%04X pair_candidates=%" PRIu64 "\n",
+                         selected_lane_count,
+                         lane_scores[selected_lane_start].nu, pair_count);
         }
         phase_start = now_ns();
         {
@@ -941,12 +989,14 @@ static int outer_phase_run(const uint16_t demo_key[16],
         }
         qsort(pair_scores, (size_t)pair_count, sizeof(*pair_scores), pair_score_compare);
         {
-            printf("phase=high-byte-lift elapsed=%.3f s\n",
-                   (double)(now_ns() - phase_start) / 1e9);
+            debug_printf("phase=high-byte-lift elapsed=%.3f s\n",
+                         (double)(now_ns() - phase_start) / 1e9);
             for (unsigned i = 0; i < options.top && i < pair_count; ++i) {
-                printf("K8-high[%u]=(%04X,%04X) score=%" PRIu64 "\n", i + 1u,
-                       pair_scores[i].k0, pair_scores[i].k1, pair_scores[i].score);
+                debug_printf("K8-high[%u]=(%04X,%04X) score=%" PRIu64 "\n",
+                             i + 1u, pair_scores[i].k0, pair_scores[i].k1,
+                             pair_scores[i].score);
             }
+            progress_bar(8u, 10u, "word lift");
         }
         {
             size_t global_max_count = 1u;
@@ -981,23 +1031,26 @@ static int outer_phase_run(const uint16_t demo_key[16],
                        full_scores[full_global_max_count].score == full_scores[0].score) {
                     ++full_global_max_count;
                 }
-                printf("phase=full-block-lift elapsed=%.3f s high_global_maximizers=%zu full_candidates=%zu full_global_maximizers=%zu unique_observed_edges=%zu\n",
-                       (double)(now_ns() - phase_start) / 1e9,
-                       global_max_count, full_count,
-                       full_global_max_count, full_edge_count);
+                debug_printf("phase=full-block-lift elapsed=%.3f s high_global_maximizers=%zu full_candidates=%zu full_global_maximizers=%zu unique_observed_edges=%zu\n",
+                             (double)(now_ns() - phase_start) / 1e9,
+                             global_max_count, full_count,
+                             full_global_max_count, full_edge_count);
                 for (unsigned i = 0; i < options.top && i < full_count; ++i) {
-                    printf("K8-full[%u]=(%04X,%04X) score=%" PRIu64 "\n", i + 1u,
-                           full_scores[i].k0, full_scores[i].k1, full_scores[i].score);
+                    debug_printf("K8-full[%u]=(%04X,%04X) score=%" PRIu64 "\n",
+                                 i + 1u, full_scores[i].k0,
+                                 full_scores[i].k1, full_scores[i].score);
                 }
                 unified_outer_k8[0] = full_scores[0].k0;
                 unified_outer_k8[1] = full_scores[0].k1;
                 unified_outer_k8_ready = 1;
                 for (size_t i = 0; i < full_global_max_count; ++i) {
-                    printf("candidate_K8=(%04X,%04X) score=%" PRIu64 "\n",
-                           full_scores[i].k0, full_scores[i].k1, full_scores[i].score);
+                    debug_printf("candidate_K8=(%04X,%04X) score=%" PRIu64 "\n",
+                                 full_scores[i].k0, full_scores[i].k1,
+                                 full_scores[i].score);
                 }
-                printf("OUTER_SELECTED_K8=%04X%04X\n",
-                       full_scores[0].k0, full_scores[0].k1);
+                debug_printf("OUTER_SELECTED_K8=%04X%04X\n",
+                             full_scores[0].k0, full_scores[0].k1);
+                progress_bar(8u, 12u, "complete");
             }
             free(full_scores);
         }
@@ -1008,7 +1061,8 @@ static int outer_phase_run(const uint16_t demo_key[16],
         free(k0_values);
     }
 
-    printf("total_elapsed=%.3f s\n", (double)(now_ns() - attack_start) / 1e9);
+    debug_printf("total_elapsed=%.3f s\n",
+                 (double)(now_ns() - attack_start) / 1e9);
     free(full_edge_counts);
     free(raw_full_edges);
     free(byte_edges);
@@ -1988,6 +2042,7 @@ static void collect_validation_transcripts(Search *search)
 static int verify_recovered(Search *search)
 {
     uint16_t candidate[16];
+    progress_bar(1u, 97u, "verification");
     for (unsigned stage = 1; stage <= 8u; ++stage) {
         candidate[(stage - 1u) * 2u] = search->pairs[stage].k0;
         candidate[(stage - 1u) * 2u + 1u] = search->pairs[stage].k1;
@@ -2032,13 +2087,22 @@ static int verify_recovered(Search *search)
 
     memcpy(unified_recovered_key, candidate, sizeof(candidate));
     unified_recovered_key_ready = 1;
-    printf("VERIFICATION=PASS codebooks=%ux65536 held_out=2x64 "
-           "reconstructed_initialization_contexts=%u retired_contexts=%u\n",
-           search->opt->contexts, search->active_count,
-           search->opt->contexts - search->active_count);
-    printf("RECOVERED_KEY=");
-    for (unsigned i = 0; i < 16u; ++i) printf("%04X", candidate[i]);
-    putchar('\n');
+    if (!debug_output) {
+        for (unsigned stage = 7u; stage >= 1u; --stage) {
+            print_recovered_segment(stage,
+                                    candidate[(stage - 1u) * 2u],
+                                    candidate[(stage - 1u) * 2u + 1u]);
+        }
+    }
+    debug_printf("VERIFICATION=PASS codebooks=%ux65536 held_out=2x64 "
+                 "reconstructed_initialization_contexts=%u retired_contexts=%u\n",
+                 search->opt->contexts, search->active_count,
+                 search->opt->contexts - search->active_count);
+    if (debug_output) {
+        printf("RECOVERED_KEY=");
+        for (unsigned i = 0; i < 16u; ++i) printf("%04X", candidate[i]);
+        putchar('\n');
+    }
     if (search->opt->audit)
         printf("AUDIT_EXACT_KEY=%s\n",
                memcmp(candidate, search->opt->oracle_key,
@@ -2230,13 +2294,21 @@ static int recover_stage(Search *search, uint8_t stage)
 {
     NuScore *nus;
     unsigned lane_tier = 0;
+    unsigned stage_begin;
+    unsigned stage_end;
     uint64_t phase_start;
     if (stage == 0u) return 0;
+    stage_begin = (8u - stage) * 100u / 8u;
+    stage_end = (9u - stage) * 100u / 8u;
+    if (stage == 7u) stage_begin = 14u;
+    progress_bar(stage, stage_begin, "S4 ranking");
     phase_start = now_ns();
     rebuild_edges(search);
     nus = rank_nus(search, stage);
-    printf("STAGE=%u phase=S4 elapsed=%.3f\n", stage,
-           (double)(now_ns() - phase_start) / 1e9);
+    debug_printf("STAGE=%u phase=S4 elapsed=%.3f\n", stage,
+                 (double)(now_ns() - phase_start) / 1e9);
+    progress_bar(stage, stage_begin + (stage_end - stage_begin) / 4u,
+                 "S8 ranking");
 
     for (size_t ni = 0; ni < WORDS;) {
         size_t nend = ni + 1u;
@@ -2251,9 +2323,12 @@ static int recover_stage(Search *search, uint8_t stage)
             unsigned pair_tier = 0;
             phase_start = now_ns();
             pairs = rank_pairs_in_nu(search, stage, nus[n].nu, &pair_count);
-            printf("STAGE=%u phase=S8 nu=%04X fibre=%zu elapsed=%.3f\n",
-                   stage, nus[n].nu, pair_count,
-                   (double)(now_ns() - phase_start) / 1e9);
+            debug_printf("STAGE=%u phase=S8 nu=%04X fibre=%zu elapsed=%.3f\n",
+                         stage, nus[n].nu, pair_count,
+                         (double)(now_ns() - phase_start) / 1e9);
+            progress_bar(stage,
+                         stage_begin + 3u * (stage_end - stage_begin) / 4u,
+                         "state filter");
 
             for (size_t pi = 0; pi < pair_count;) {
                 size_t pend = pi + 1u;
@@ -2546,12 +2621,13 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
     memset(search.active_context, 1, opt.contexts);
     search.pairs[8] = opt.known_k8;
     search.start_ns = now_ns();
-    printf("SEPAR ranked inward recovery\n");
-    printf("K8_SOURCE=outer candidate=%04X%04X contexts=%u threads=%u "
-           "seed=%" PRIu64 "\n", opt.known_k8.k0, opt.known_k8.k1,
-           opt.contexts, opt.threads, opt.seed);
-    printf("BUDGETS lane=%u pair=%u state=%u (0=exhaustive)\n",
-           opt.lane_tiers, opt.pair_tiers, opt.state_tiers);
+    debug_printf("SEPAR ranked inward recovery\n");
+    debug_printf("K8_SOURCE=outer candidate=%04X%04X contexts=%u threads=%u "
+                 "seed=%" PRIu64 "\n", opt.known_k8.k0, opt.known_k8.k1,
+                 opt.contexts, opt.threads, opt.seed);
+    debug_printf("BUDGETS lane=%u pair=%u state=%u (0=exhaustive)\n",
+                 opt.lane_tiers, opt.pair_tiers, opt.state_tiers);
+    progress_bar(7u, 12u, "codebooks");
 
     for (unsigned c = 0; c < opt.contexts; ++c) {
         SeparCtx initial;
@@ -2569,26 +2645,27 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
                WORDS * sizeof(*search.verification_tables[c]));
     }
     collect_validation_transcripts(&search);
-    printf("ORACLE codebook_contexts=%u codebook_reset_messages=%u "
-           "codebook_word_encryptions=%u held_out_reset_messages=2 "
-           "held_out_word_encryptions=128 total_reset_messages=%u "
-           "total_word_encryptions=%u\n",
-           opt.contexts, opt.contexts * WORDS, opt.contexts * WORDS,
-           opt.contexts * WORDS + 2u, opt.contexts * WORDS + 128u);
+    debug_printf("ORACLE codebook_contexts=%u codebook_reset_messages=%u "
+                 "codebook_word_encryptions=%u held_out_reset_messages=2 "
+                 "held_out_word_encryptions=128 total_reset_messages=%u "
+                 "total_word_encryptions=%u\n",
+                 opt.contexts, opt.contexts * WORDS, opt.contexts * WORDS,
+                 opt.contexts * WORDS + 2u, opt.contexts * WORDS + 128u);
+    progress_bar(7u, 13u, "outer peel");
 
     found = peel_k8_context(&search, 0u);
     if (!found) {
         const char *reason = exhaustive_mode(&opt) ?
             "candidate-space-exhausted" : "rank-budget-exhausted";
-        printf("RESULT=INCONCLUSIVE reason=%s nodes=%" PRIu64
-               " leaves=%" PRIu64 " elapsed=%.3f\n", reason,
-               search.nodes, search.leaves,
-               (double)(now_ns() - search.start_ns) / 1e9);
+        debug_printf("RESULT=INCONCLUSIVE reason=%s nodes=%" PRIu64
+                     " leaves=%" PRIu64 " elapsed=%.3f\n", reason,
+                     search.nodes, search.leaves,
+                     (double)(now_ns() - search.start_ns) / 1e9);
     }
     else
-        printf("RESULT=SUCCESS nodes=%" PRIu64 " leaves=%" PRIu64
-               " elapsed=%.3f\n", search.nodes, search.leaves,
-               (double)(now_ns() - search.start_ns) / 1e9);
+        debug_printf("RESULT=SUCCESS nodes=%" PRIu64 " leaves=%" PRIu64
+                     " elapsed=%.3f\n", search.nodes, search.leaves,
+                     (double)(now_ns() - search.start_ns) / 1e9);
 
     for (unsigned c = 0; c < opt.contexts; ++c) {
         edge_profile_clear(&search.ctx[c].edge);
@@ -2601,7 +2678,7 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
 
 static void unified_usage(const char *program)
 {
-    fprintf(stderr, "usage: %s HEX64\n", program);
+    fprintf(stderr, "usage: %s [-debug] HEX64\n", program);
     fprintf(stderr, "       %s --self-test\n", program);
 }
 
@@ -2613,6 +2690,7 @@ int main(int argc, char **argv)
     };
     uint16_t demo_key[16];
     KeyPair selected_k8;
+    const char *key_argument = NULL;
     unsigned threads = detected_threads();
     int status;
     if (threads > 16u) threads = 16u;
@@ -2632,38 +2710,55 @@ int main(int argc, char **argv)
         return inward_self_test(&opt) ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
-    if (argc != 2 || parse_hex_words(argv[1], demo_key, 16u) != 0) {
+    if (argc == 2) {
+        key_argument = argv[1];
+    } else if (argc == 3 && strcmp(argv[1], "-debug") == 0) {
+        debug_output = 1;
+        key_argument = argv[2];
+    }
+    if (key_argument == NULL ||
+        parse_hex_words(key_argument, demo_key, 16u) != 0) {
         unified_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    printf("SEPAR unified key-recovery demonstration\n");
-    printf("MODE=repeated-reset chosen-IV outer_lanes=1 "
-           "inward_tiers=1/1/1 contexts=8 threads=%u\n", threads);
+    debug_printf("SEPAR unified key-recovery demonstration\n");
+    debug_printf("MODE=repeated-reset chosen-IV outer_lanes=1 "
+                 "inward_tiers=1/1/1 contexts=8 threads=%u\n", threads);
 
     unified_outer_k8_ready = 0;
+    progress_bar(8u, 0u, "prefix queries");
     status = outer_phase_run(demo_key, outer_iv, threads);
     if (status != EXIT_SUCCESS || !unified_outer_k8_ready) {
+        finish_progress_line();
         fprintf(stderr, "RESULT=ERROR phase=outer\n");
         return EXIT_FAILURE;
     }
 
     selected_k8.k0 = unified_outer_k8[0];
     selected_k8.k1 = unified_outer_k8[1];
-    printf("\nPHASE_HANDOFF K8=%04X%04X source=outer-transcript-ranking\n",
-           selected_k8.k0, selected_k8.k1);
+    debug_printf("\nPHASE_HANDOFF K8=%04X%04X source=outer-transcript-ranking\n",
+                 selected_k8.k0, selected_k8.k1);
+    print_recovered_segment(8u, selected_k8.k0, selected_k8.k1);
 
     unified_recovered_key_ready = 0;
     status = inward_phase_run(demo_key, selected_k8, threads);
 
     if (status == EXIT_SUCCESS && unified_recovered_key_ready) {
-        printf("DEMO_EXACT=%s\n",
-               memcmp(unified_recovered_key, demo_key, sizeof(demo_key)) == 0
-                   ? "PASS" : "TRANSCRIPT_EQUIVALENT");
-        printf("FULL_ATTACK_RESULT=SUCCESS\n");
+        progress_bar(1u, 100u, "complete");
+        finish_progress_line();
+        debug_printf("DEMO_EXACT=%s\n",
+                     memcmp(unified_recovered_key, demo_key,
+                            sizeof(demo_key)) == 0
+                         ? "PASS" : "TRANSCRIPT_EQUIVALENT");
+        debug_printf("FULL_ATTACK_RESULT=SUCCESS\n");
         return EXIT_SUCCESS;
     }
 
-    printf("FULL_ATTACK_RESULT=INCONCLUSIVE\n");
+    finish_progress_line();
+    if (debug_output)
+        printf("FULL_ATTACK_RESULT=INCONCLUSIVE\n");
+    else
+        printf("Attack inconclusive.\n");
     return status == 2 ? 2 : EXIT_FAILURE;
 }

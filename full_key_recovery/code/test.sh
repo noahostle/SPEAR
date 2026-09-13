@@ -18,17 +18,25 @@ if $attack 00 >/dev/null 2>&1; then
     exit 1
 fi
 
-full=$($attack "$demo_key")
+full=$($attack "$demo_key" | tr '\r' '\n')
 printf '%s\n' "$full"
 printf '%s\n' "$full" |
-    grep -q '^OUTER_SELECTED_K8=FC7D6371$'
+    grep -q '^Recovered K8: FC7D6371$'
 printf '%s\n' "$full" |
-    grep -q '^PHASE_HANDOFF K8=FC7D6371 source=outer-transcript-ranking$'
+    grep -q '^Recovered K7: 8D1E9DF5$'
 printf '%s\n' "$full" |
-    grep -q '^VERIFICATION=PASS codebooks=8x65536 held_out=2x64 '
+    grep -q '^Recovered K6: F44A233E$'
 printf '%s\n' "$full" |
-    grep -q '^RECOVERED_KEY=E8B9B733DA5D96D702DD3972E95307FD50C512DBF44A233E8D1E9DF5FC7D6371$'
-printf '%s\n' "$full" | grep -q '^DEMO_EXACT=PASS$'
-printf '%s\n' "$full" | grep -q '^FULL_ATTACK_RESULT=SUCCESS$'
+    grep -q '^Recovered K5: 50C512DB$'
+printf '%s\n' "$full" | grep -q '^Recovered K4: E95307FD$'
+printf '%s\n' "$full" | grep -q '^Recovered K3: 02DD3972$'
+printf '%s\n' "$full" | grep -q '^Recovered K2: DA5D96D7$'
+printf '%s\n' "$full" | grep -q '^Recovered K1: E8B9B733$'
+printf '%s\n' "$full" | grep -Eq '^Stage K1 .* 100%$'
+if printf '%s\n' "$full" |
+    grep -Eq '^(SEPAR |MODE=|STAGE=|ORACLE |RESULT=|FULL_ATTACK_RESULT=)'; then
+    echo '[test] debug output leaked into default mode' >&2
+    exit 1
+fi
 
 echo '[test] unified outer-to-inward recovery passed'
