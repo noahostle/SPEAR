@@ -21,18 +21,20 @@ fi
 full=$($attack "$demo_key" | tr '\r' '\n')
 printf '%s\n' "$full"
 printf '%s\n' "$full" |
-    grep -q '^Recovered K8: FC7D6371$'
+    grep -q '^K8 : FC7D6371$'
 printf '%s\n' "$full" |
-    grep -q '^Recovered K7: 8D1E9DF5$'
+    grep -q '^K7 : 8D1E9DF5$'
 printf '%s\n' "$full" |
-    grep -q '^Recovered K6: F44A233E$'
+    grep -q '^K6 : F44A233E$'
 printf '%s\n' "$full" |
-    grep -q '^Recovered K5: 50C512DB$'
-printf '%s\n' "$full" | grep -q '^Recovered K4: E95307FD$'
-printf '%s\n' "$full" | grep -q '^Recovered K3: 02DD3972$'
-printf '%s\n' "$full" | grep -q '^Recovered K2: DA5D96D7$'
-printf '%s\n' "$full" | grep -q '^Recovered K1: E8B9B733$'
-printf '%s\n' "$full" | grep -Eq '^Stage K1 .* 100%$'
+    grep -q '^K5 : 50C512DB$'
+printf '%s\n' "$full" | grep -q '^K4 : E95307FD$'
+printf '%s\n' "$full" | grep -q '^K3 : 02DD3972$'
+printf '%s\n' "$full" | grep -q '^K2 : DA5D96D7$'
+printf '%s\n' "$full" | grep -q '^K1 : E8B9B733$'
+printf '%s\n' "$full" | grep -q '^Working: complete$'
+printf '%s\n' "$full" |
+    grep -q '^\[################################\] 100%$'
 if printf '%s\n' "$full" |
     grep -Eq '^(SEPAR |MODE=|STAGE=|ORACLE |RESULT=|FULL_ATTACK_RESULT=)'; then
     echo '[test] debug output leaked into default mode' >&2

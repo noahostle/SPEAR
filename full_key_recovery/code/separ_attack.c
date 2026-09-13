@@ -564,7 +564,15 @@ static int unified_outer_k8_ready;
 static uint16_t unified_recovered_key[16];
 static int unified_recovered_key_ready;
 static int debug_output;
-static int progress_line_active;
+static uint16_t dashboard_keys[9][2];
+static uint8_t dashboard_key_ready[9];
+static unsigned dashboard_stage;
+static unsigned dashboard_done;
+static unsigned dashboard_total = 1u;
+static unsigned dashboard_spinner;
+static int dashboard_drawn;
+static int dashboard_terminal = -1;
+static char dashboard_activity[32];
 
 static void debug_printf(const char *format, ...)
 {
@@ -575,37 +583,117 @@ static void debug_printf(const char *format, ...)
     va_end(arguments);
 }
 
-static void progress_bar(unsigned stage, unsigned percent,
-                         const char *activity)
+static int stdout_is_terminal(void)
+{
+#if defined(_WIN32)
+    DWORD mode;
+    return GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) != 0;
+#else
+    return isatty(STDOUT_FILENO);
+#endif
+}
+
+static void print_dashboard_bar(unsigned percent)
 {
     enum { BAR_WIDTH = 32 };
-    unsigned filled;
-    if (debug_output) return;
-    if (percent > 100u) percent = 100u;
-    filled = percent * BAR_WIDTH / 100u;
-    printf("\rStage K%u %-14s [", stage, activity);
+    unsigned filled = percent * BAR_WIDTH / 100u;
+    putchar('[');
     for (unsigned i = 0; i < BAR_WIDTH; ++i)
         putchar(i < filled ? '#' : '-');
-    printf("] %3u%%", percent);
-    fflush(stdout);
-    progress_line_active = 1;
+    printf("] %3u%%\n", percent);
 }
 
-static void finish_progress_line(void)
+static void render_dashboard(void)
 {
-    if (debug_output || !progress_line_active) return;
-    putchar('\n');
+    static const char spinner[] = {'/', '-', '\\', '|'};
+    unsigned percent;
+    if (debug_output) return;
+    if (dashboard_terminal < 0) dashboard_terminal = stdout_is_terminal();
+    percent = dashboard_total == 0u ? 100u :
+        (unsigned)(((uint64_t)dashboard_done * 100u) / dashboard_total);
+    if (percent > 100u) percent = 100u;
+
+    if (dashboard_terminal) {
+        if (dashboard_drawn) printf("\033[11A");
+        for (unsigned stage = 8u; stage >= 1u; --stage) {
+            printf("\r\033[2KK%u :", stage);
+            if (dashboard_key_ready[stage])
+                printf(" %04X%04X", dashboard_keys[stage][0],
+                       dashboard_keys[stage][1]);
+            else if (stage == dashboard_stage)
+                printf(" %c", spinner[dashboard_spinner & 3u]);
+            putchar('\n');
+        }
+        printf("\r\033[2K\n");
+        if (dashboard_stage != 0u)
+            printf("\r\033[2KWorking: K%u %s\n", dashboard_stage,
+                   dashboard_activity);
+        else
+            printf("\r\033[2KWorking: complete\n");
+        printf("\r\033[2K");
+        print_dashboard_bar(percent);
+        dashboard_drawn = 1;
+    } else {
+        if (dashboard_stage != 0u)
+            printf("Working: K%u %s\n", dashboard_stage,
+                   dashboard_activity);
+        else
+            printf("Working: complete\n");
+        print_dashboard_bar(percent);
+    }
+    dashboard_spinner++;
     fflush(stdout);
-    progress_line_active = 0;
 }
 
-static void print_recovered_segment(unsigned stage, uint16_t k0,
-                                    uint16_t k1)
+static void dashboard_progress(unsigned stage, const char *activity,
+                               uint64_t done, uint64_t total)
 {
     if (debug_output) return;
-    finish_progress_line();
-    printf("Recovered K%u: %04X%04X\n", stage, k0, k1);
-    fflush(stdout);
+    dashboard_stage = stage;
+    dashboard_done = done > UINT_MAX ? UINT_MAX : (unsigned)done;
+    dashboard_total = total > UINT_MAX ? UINT_MAX : (unsigned)total;
+    if (dashboard_total == 0u) dashboard_total = 1u;
+    snprintf(dashboard_activity, sizeof(dashboard_activity), "%s", activity);
+    render_dashboard();
+}
+
+static void dashboard_recovered(unsigned stage, uint16_t k0, uint16_t k1)
+{
+    int changed;
+    if (debug_output) return;
+    changed = !dashboard_key_ready[stage] ||
+        dashboard_keys[stage][0] != k0 || dashboard_keys[stage][1] != k1;
+    dashboard_keys[stage][0] = k0;
+    dashboard_keys[stage][1] = k1;
+    dashboard_key_ready[stage] = 1u;
+    if (!changed) return;
+    if (dashboard_terminal < 0) dashboard_terminal = stdout_is_terminal();
+    if (dashboard_terminal)
+        render_dashboard();
+    else {
+        printf("K%u : %04X%04X\n", stage, k0, k1);
+        fflush(stdout);
+    }
+}
+
+static void dashboard_clear_through(unsigned stage)
+{
+    if (debug_output) return;
+    if (stage > 8u) stage = 8u;
+    for (unsigned i = stage; i >= 1u; --i) {
+        dashboard_key_ready[i] = 0u;
+        dashboard_keys[i][0] = 0u;
+        dashboard_keys[i][1] = 0u;
+    }
+}
+
+static void dashboard_complete(void)
+{
+    if (debug_output) return;
+    dashboard_stage = 0u;
+    dashboard_done = 1u;
+    dashboard_total = 1u;
+    render_dashboard();
 }
 
 /*
@@ -881,7 +969,8 @@ static int outer_phase_run(const uint16_t demo_key[16],
     debug_printf("phase=query+aggregate elapsed=%.3f s edges=%u\n",
                  (double)(now_ns() - phase_start) / 1e9,
                  WORDS * DIFF_COUNT);
-    progress_bar(8u, 4u, "lane ranking");
+    dashboard_progress(8u, "prefix queries", WORDS, WORDS);
+    dashboard_progress(8u, "S4 ranking", 0u, WORDS);
 
     phase_start = now_ns();
     for (unsigned t = 0; t < options.threads; ++t) {
@@ -910,7 +999,7 @@ static int outer_phase_run(const uint16_t demo_key[16],
             debug_printf("lane[%u] nu=%04X score=%" PRIu64 "\n", i + 1u,
                          lane_scores[i].nu, lane_scores[i].score);
         }
-        progress_bar(8u, 7u, "byte lift");
+        dashboard_progress(8u, "S4 ranking", WORDS, WORDS);
     }
 
     {
@@ -955,6 +1044,7 @@ static int outer_phase_run(const uint16_t demo_key[16],
                          selected_lane_count,
                          lane_scores[selected_lane_start].nu, pair_count);
         }
+        dashboard_progress(8u, "S8 ranking", 0u, pair_count);
         phase_start = now_ns();
         {
             uint64_t pair_offset = 0u;
@@ -996,7 +1086,7 @@ static int outer_phase_run(const uint16_t demo_key[16],
                              i + 1u, pair_scores[i].k0, pair_scores[i].k1,
                              pair_scores[i].score);
             }
-            progress_bar(8u, 10u, "word lift");
+            dashboard_progress(8u, "S8 ranking", pair_count, pair_count);
         }
         {
             size_t global_max_count = 1u;
@@ -1009,6 +1099,7 @@ static int outer_phase_run(const uint16_t demo_key[16],
             PairScore *full_scores =
                 (PairScore *)malloc(full_count * sizeof(*full_scores));
             if (full_scores == NULL) die("full-lift allocation failed");
+            dashboard_progress(8u, "S16 ranking", 0u, full_count);
             phase_start = now_ns();
             for (unsigned t = 0; t < options.threads; ++t) {
                 full_lift_workers[t].begin =
@@ -1050,7 +1141,8 @@ static int outer_phase_run(const uint16_t demo_key[16],
                 }
                 debug_printf("OUTER_SELECTED_K8=%04X%04X\n",
                              full_scores[0].k0, full_scores[0].k1);
-                progress_bar(8u, 12u, "complete");
+                dashboard_progress(8u, "S16 ranking", full_count,
+                                   full_count);
             }
             free(full_scores);
         }
@@ -1766,7 +1858,7 @@ static NuScore *rank_nus(Search *search, uint8_t stage)
         (ThreadHandle *)calloc(search->opt->threads, sizeof(*handles));
     NuWorker *workers =
         (NuWorker *)calloc(search->opt->threads, sizeof(*workers));
-    if (rows == NULL || handles == NULL || workers == NULL)
+        if (rows == NULL || handles == NULL || workers == NULL)
         die("lane-rank allocation failed");
     for (unsigned t = 0; t < search->opt->threads; ++t) {
         workers[t].contexts = search->ctx;
@@ -1840,11 +1932,34 @@ static PairScore *rank_pairs_in_nu(Search *search, uint8_t stage, uint16_t nu,
         workers[t].k1_values = k1_values;
         workers[t].k1_count = k1_count;
         workers[t].scores = rows;
-        workers[t].begin = ((uint64_t)count * t) / search->opt->threads;
-        workers[t].end = ((uint64_t)count * (t + 1u)) / search->opt->threads;
     }
-    run_threads(handles, search->opt->threads, pair_worker_main,
-                workers, sizeof(*workers));
+    if (debug_output) {
+        for (unsigned t = 0; t < search->opt->threads; ++t) {
+            workers[t].begin = ((uint64_t)count * t) /
+                search->opt->threads;
+            workers[t].end = ((uint64_t)count * (t + 1u)) /
+                search->opt->threads;
+        }
+        run_threads(handles, search->opt->threads, pair_worker_main,
+                    workers, sizeof(*workers));
+    } else {
+        enum { PROGRESS_CHUNKS = 32 };
+        dashboard_progress(stage, "S8 ranking", 0u, count);
+        for (unsigned chunk = 0; chunk < PROGRESS_CHUNKS; ++chunk) {
+            uint64_t begin = ((uint64_t)count * chunk) / PROGRESS_CHUNKS;
+            uint64_t end = ((uint64_t)count * (chunk + 1u)) /
+                PROGRESS_CHUNKS;
+            for (unsigned t = 0; t < search->opt->threads; ++t) {
+                workers[t].begin = begin +
+                    ((end - begin) * t) / search->opt->threads;
+                workers[t].end = begin +
+                    ((end - begin) * (t + 1u)) / search->opt->threads;
+            }
+            run_threads(handles, search->opt->threads, pair_worker_main,
+                        workers, sizeof(*workers));
+            dashboard_progress(stage, "S8 ranking", end, count);
+        }
+    }
     qsort(rows, count, sizeof(*rows), pair_cmp_rank);
     if (search->opt->audit &&
         branch_is_true_through(search, (uint8_t)(stage + 1u)) &&
@@ -2042,7 +2157,9 @@ static void collect_validation_transcripts(Search *search)
 static int verify_recovered(Search *search)
 {
     uint16_t candidate[16];
-    progress_bar(1u, 97u, "verification");
+    uint64_t verify_total =
+        (uint64_t)search->opt->contexts * WORDS + 2u * 64u;
+    dashboard_progress(1u, "verification", 0u, verify_total);
     for (unsigned stage = 1; stage <= 8u; ++stage) {
         candidate[(stage - 1u) * 2u] = search->pairs[stage].k0;
         candidate[(stage - 1u) * 2u + 1u] = search->pairs[stage].k1;
@@ -2067,6 +2184,8 @@ static int verify_recovered(Search *search)
             if (encrypt_word((uint16_t)x, &local, candidate) !=
                 search->verification_tables[c][x]) return 0;
         }
+        dashboard_progress(1u, "verification",
+                           (uint64_t)(c + 1u) * WORDS, verify_total);
     }
 
     /* Two additional IVs, each one stateful 64-word transcript. */
@@ -2083,15 +2202,20 @@ static int verify_recovered(Search *search)
                 search->validation_transcripts[transcript][i])
                 return 0;
         }
+        dashboard_progress(
+            1u, "verification",
+            (uint64_t)search->opt->contexts * WORDS +
+                (uint64_t)(transcript + 1u) * 64u,
+            verify_total);
     }
 
     memcpy(unified_recovered_key, candidate, sizeof(candidate));
     unified_recovered_key_ready = 1;
     if (!debug_output) {
         for (unsigned stage = 7u; stage >= 1u; --stage) {
-            print_recovered_segment(stage,
-                                    candidate[(stage - 1u) * 2u],
-                                    candidate[(stage - 1u) * 2u + 1u]);
+            dashboard_recovered(stage,
+                                candidate[(stage - 1u) * 2u],
+                                candidate[(stage - 1u) * 2u + 1u]);
         }
     }
     debug_printf("VERIFICATION=PASS codebooks=%ux65536 held_out=2x64 "
@@ -2118,7 +2242,9 @@ static int try_stage1_context(Search *search, KeyPair pair,
     if (context == search->opt->contexts) {
         search->pairs[1] = pair;
         search->leaves++;
+        dashboard_recovered(1u, pair.k0, pair.k1);
         if (verify_recovered(search)) return 1;
+        dashboard_clear_through(1u);
         return 0;
     }
     if (!search->active_context[context])
@@ -2126,8 +2252,11 @@ static int try_stage1_context(Search *search, KeyPair pair,
     for (unsigned h = 0; h < 256u; ++h) {
         uint16_t s1;
         uint16_t old_s1, old_s2;
+        if ((h & 7u) == 0u)
+            dashboard_progress(1u, "exact factor", h, 256u);
         if (!stage1_factor_for_h(search->ctx[context].pivot, pair,
                                  (uint8_t)h, &s1)) continue;
+        dashboard_progress(1u, "exact factor", h + 1u, 256u);
         old_s1 = search->state[context][0];
         old_s2 = search->state[context][1];
         search->state[context][0] = s1;
@@ -2195,13 +2324,21 @@ static int advance_candidate_context(Search *search, uint8_t stage,
     StateScore *states;
     size_t count;
     unsigned tier = 0;
-    if (context == opt->contexts)
-        return recover_stage(search, (uint8_t)(stage - 1u));
+    if (context == opt->contexts) {
+        int result;
+        dashboard_recovered(stage, pair.k0, pair.k1);
+        result = recover_stage(search, (uint8_t)(stage - 1u));
+        if (!result) dashboard_clear_through(stage);
+        return result;
+    }
 
     if (!search->active_context[context])
         return advance_candidate_context(search, stage, pair, context + 1u);
+    dashboard_progress(stage, "state filtering", context, opt->contexts);
     states = state_order(search->ctx[context].pivot, pair, stage,
                          opt->threads, &count);
+    dashboard_progress(stage, "state filtering", context + 1u,
+                       opt->contexts);
     audit_state_rank(search, stage, context, states, count);
     if (count != 0u && opt->state_tiers != 0u &&
         search->active_count > 1u) {
@@ -2294,21 +2431,15 @@ static int recover_stage(Search *search, uint8_t stage)
 {
     NuScore *nus;
     unsigned lane_tier = 0;
-    unsigned stage_begin;
-    unsigned stage_end;
     uint64_t phase_start;
     if (stage == 0u) return 0;
-    stage_begin = (8u - stage) * 100u / 8u;
-    stage_end = (9u - stage) * 100u / 8u;
-    if (stage == 7u) stage_begin = 14u;
-    progress_bar(stage, stage_begin, "S4 ranking");
+    dashboard_progress(stage, "S4 ranking", 0u, WORDS);
     phase_start = now_ns();
     rebuild_edges(search);
     nus = rank_nus(search, stage);
     debug_printf("STAGE=%u phase=S4 elapsed=%.3f\n", stage,
                  (double)(now_ns() - phase_start) / 1e9);
-    progress_bar(stage, stage_begin + (stage_end - stage_begin) / 4u,
-                 "S8 ranking");
+    dashboard_progress(stage, "S4 ranking", WORDS, WORDS);
 
     for (size_t ni = 0; ni < WORDS;) {
         size_t nend = ni + 1u;
@@ -2326,12 +2457,10 @@ static int recover_stage(Search *search, uint8_t stage)
             debug_printf("STAGE=%u phase=S8 nu=%04X fibre=%zu elapsed=%.3f\n",
                          stage, nus[n].nu, pair_count,
                          (double)(now_ns() - phase_start) / 1e9);
-            progress_bar(stage,
-                         stage_begin + 3u * (stage_end - stage_begin) / 4u,
-                         "state filter");
 
             for (size_t pi = 0; pi < pair_count;) {
                 size_t pend = pi + 1u;
+                size_t refine_count;
                 RankedPair *refined;
                 while (pend < pair_count &&
                        pairs[pend].score == pairs[pi].score) pend++;
@@ -2342,13 +2471,23 @@ static int recover_stage(Search *search, uint8_t stage)
                 refined = (RankedPair *)malloc(
                     (pend - pi) * sizeof(*refined));
                 if (refined == NULL) die("S16 refinement allocation failed");
+                refine_count = pend - pi;
+                dashboard_progress(stage, "S16 ranking", 0u,
+                                   refine_count);
                 for (size_t j = pi; j < pend; ++j) {
+                    size_t completed;
                     KeyPair pair = {pairs[j].k0, pairs[j].k1};
                     refined[j - pi].k0 = pair.k0;
                     refined[j - pi].k1 = pair.k1;
                     refined[j - pi].s8 = pairs[j].score;
                     refined[j - pi].s16 =
                         refine_pair_s16(search, stage, pair);
+                    completed = j - pi + 1u;
+                    if (completed == refine_count ||
+                        completed * 32u / refine_count !=
+                            (completed - 1u) * 32u / refine_count)
+                        dashboard_progress(stage, "S16 ranking", completed,
+                                           refine_count);
                 }
                 qsort(refined, pend - pi, sizeof(*refined), ranked_pair_cmp);
                 for (size_t j = 0; j < pend - pi; ++j) {
@@ -2405,6 +2544,7 @@ static int peel_k8_context(Search *search, unsigned context)
     uint16_t *peeled;
     ByteScore bytes[256];
     unsigned tier = 0;
+    dashboard_progress(7u, "K8 peel", context, search->opt->contexts);
     if (context == search->opt->contexts) return recover_stage(search, 7u);
 
     if (!search->active_context[context])
@@ -2627,7 +2767,7 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
                  opt.contexts, opt.threads, opt.seed);
     debug_printf("BUDGETS lane=%u pair=%u state=%u (0=exhaustive)\n",
                  opt.lane_tiers, opt.pair_tiers, opt.state_tiers);
-    progress_bar(7u, 12u, "codebooks");
+    dashboard_progress(7u, "codebooks", 0u, opt.contexts);
 
     for (unsigned c = 0; c < opt.contexts; ++c) {
         SeparCtx initial;
@@ -2643,6 +2783,7 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
             die("verification table allocation failed");
         memcpy(search.verification_tables[c], search.ctx[c].pivot,
                WORDS * sizeof(*search.verification_tables[c]));
+        dashboard_progress(7u, "codebooks", c + 1u, opt.contexts);
     }
     collect_validation_transcripts(&search);
     debug_printf("ORACLE codebook_contexts=%u codebook_reset_messages=%u "
@@ -2651,7 +2792,7 @@ static int inward_phase_run(const uint16_t oracle_key[16], KeyPair known_k8,
                  "total_word_encryptions=%u\n",
                  opt.contexts, opt.contexts * WORDS, opt.contexts * WORDS,
                  opt.contexts * WORDS + 2u, opt.contexts * WORDS + 128u);
-    progress_bar(7u, 13u, "outer peel");
+    dashboard_progress(7u, "K8 peel", 0u, opt.contexts);
 
     found = peel_k8_context(&search, 0u);
     if (!found) {
@@ -2727,10 +2868,9 @@ int main(int argc, char **argv)
                  "inward_tiers=1/1/1 contexts=8 threads=%u\n", threads);
 
     unified_outer_k8_ready = 0;
-    progress_bar(8u, 0u, "prefix queries");
+    dashboard_progress(8u, "prefix queries", 0u, WORDS);
     status = outer_phase_run(demo_key, outer_iv, threads);
     if (status != EXIT_SUCCESS || !unified_outer_k8_ready) {
-        finish_progress_line();
         fprintf(stderr, "RESULT=ERROR phase=outer\n");
         return EXIT_FAILURE;
     }
@@ -2739,14 +2879,13 @@ int main(int argc, char **argv)
     selected_k8.k1 = unified_outer_k8[1];
     debug_printf("\nPHASE_HANDOFF K8=%04X%04X source=outer-transcript-ranking\n",
                  selected_k8.k0, selected_k8.k1);
-    print_recovered_segment(8u, selected_k8.k0, selected_k8.k1);
+    dashboard_recovered(8u, selected_k8.k0, selected_k8.k1);
 
     unified_recovered_key_ready = 0;
     status = inward_phase_run(demo_key, selected_k8, threads);
 
     if (status == EXIT_SUCCESS && unified_recovered_key_ready) {
-        progress_bar(1u, 100u, "complete");
-        finish_progress_line();
+        dashboard_complete();
         debug_printf("DEMO_EXACT=%s\n",
                      memcmp(unified_recovered_key, demo_key,
                             sizeof(demo_key)) == 0
@@ -2755,7 +2894,6 @@ int main(int argc, char **argv)
         return EXIT_SUCCESS;
     }
 
-    finish_progress_line();
     if (debug_output)
         printf("FULL_ATTACK_RESULT=INCONCLUSIVE\n");
     else
