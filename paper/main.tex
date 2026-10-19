@@ -1,0 +1,791 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,amsmath,amssymb,amsthm,booktabs,microtype}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={Exact Key-List Recovery in SEPAR},pdfauthor={Noah Ostle}}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newcommand{\E}{\mathcal E}
+\newcommand{\D}{\mathcal D}
+\newcommand{\xor}{\mathbin\oplus}
+\newcommand{\OR}{\mathbin{\mathrm{OR}}}
+\newcommand{\rol}{\operatorname{rol}_{16}}
+\newcommand{\pack}{\operatorname{pack}}
+\newcommand{\calP}{\mathcal P}
+\newcommand{\Tr}{\operatorname T}
+\title{Exact Key-List Recovery in SEPAR}
+\author{Noah Ostle}
+\date{19 October 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+SEPAR's word permutations preserve nested blocks. State additions
+disturb these blocks only at narrow carry boundaries. We use this
+structure to recover numerical rotor keys from quotient paths, then
+remove rotors inward by an exact partition join. Initialization
+supplies the remaining state words and the first two rotor keys.
+The result is a chosen-IV algorithm that returns a list of complete
+256-bit keys without ranking or candidate cutoffs. For every fixed
+master key, its true key is in the list with probability at least
+\(1-1.307164\cdot10^{-8}\). We also give a 511-query
+distinguisher.
+\end{abstract}
+
+\section{Target and attack model}
+We analyze the literal supplied C implementation of SEPAR~\cite{separ}.
+It has eight keyed word permutations, a 128-bit state, and a 16-bit
+LFSR. The published description and the C source differ in some
+sequential assignments; the equations here follow the source.
+An adversary may choose an IV and a plaintext, reset, and ask for the
+first ciphertext word repeatedly under that IV. This reuse is part of
+the attack model. The recovery never reads the internal state or a
+rotor oracle. Complete candidate keys are also checked against saved
+public ciphertext tables.
+
+All additions below are modulo \(2^{16}\). Write a word as four
+nibbles \((a,b,c,d)\), from most to least significant. Let
+\(\Sigma\) apply the four S-boxes in parallel. Their entries for
+inputs \(0,\ldots,F\) are
+\[
+\begin{array}{c|*{16}{c}}
+S_1&1&F&B&2&0&3&5&8&6&9&C&7&D&A&E&4\\
+S_2&6&A&F&4&E&D&9&2&1&7&C&B&0&3&5&8\\
+S_3&C&2&6&1&0&3&5&8&7&9&B&E&A&D&F&4\\
+S_4&D&B&2&7&0&3&5&8&6&C&F&1&A&4&9&E
+\end{array}
+\]
+Rotor \(i\) has its own two-word key \(K_i=(k_{i,0},k_{i,1})\).
+Its four subkeys are
+\[
+\begin{split}
+G(u)&=u\OR\bigl(S_1((u\gg6)\mathbin{\&}15)\ll6\bigr),\\
+\kappa_0&=k_{i,0},\qquad \kappa_1=k_{i,1},\\
+\kappa_2&=G(\rol(k_{i,0},6))\xor(i+2),\\
+\kappa_3&=G(\rol(k_{i,1},10))\xor(i+3).
+\end{split}
+\]
+For \(j=0,1,2,3\), apply \(x\leftarrow L\Sigma(x\xor\kappa_j)\);
+finally apply
+\(x\leftarrow\Sigma(x\xor\kappa_0\xor\kappa_1)
+\xor\kappa_2\xor\kappa_3\).
+The implemented linear map is
+\begin{equation}
+                 L(a,b,c,d)=(b\xor c,b,a,a\xor d).
+\label{eq:linear}
+\end{equation}
+This defines a permutation \(\E_i\), with inverse \(\D_i\).
+The OR in \(G\) is intentional: replacing bits instead would
+describe a different target.
+
+For an initialized state \(s=(s_1,\ldots,s_8)\), the first-word map is
+\begin{equation}
+ R_0(p)=p,\qquad R_i(p)=\E_i(R_{i-1}(p)+s_i),\qquad C(p)=R_8(p).
+ \label{eq:cascade}
+\end{equation}
+Initialization consists of four rounds of the map given in
+Section~\ref{sec:state}. Later words use a state and LFSR update
+specified by the source. All acquisition queries in this attack
+reset before the first word, so \eqref{eq:cascade} is the map under
+analysis. Complete-key replay uses the source's initialization.
+
+\section{Preserved blocks and useful states}\label{sec:state}
+\begin{lemma}[Triangular rotor]\label{lem:triangular}
+Every numerical rotor key gives
+\[
+ \E_i(a,b,c,d)
+ =\bigl(P_{i,b}(a),\,Q_i(b),\,M_{i,b}(c),\,
+         T_{i,a,b,c}(d)\bigr),
+\]
+where each one-coordinate map is a permutation.
+Consequently, the high twelve output bits depend only on the high
+twelve input bits. The middle-byte quotient
+\[
+ m_i(16b+c)=16Q_i(b)+M_{i,b}(c)
+\]
+is a permutation of 256 values.
+\end{lemma}
+\begin{proof}
+One keyed substitution and linear layer send
+\((a,b,c,d)\) to coordinates depending respectively on
+\((b,c),b,a,(a,d)\). Four layers give dependency sets
+\((a,b),b,(b,c),(a,b,c,d)\). The final substitution and XOR
+do not enlarge them. With the other coordinates fixed, each
+coordinate path is a composition of nibble permutations and XORs.
+\end{proof}
+In particular, a change confined to \(d\) stays in \(d\) under
+\(L\); its nibble branch number is two. A carry at a state addition
+may move an input between two adjacent quotient blocks, but cannot
+diffuse it through all blocks. These narrow carry boundaries are the
+objects decoded below. The OR schedule also leaves small raw-key
+fibres after quotient data have been fixed.
+
+One initialization round first computes
+\[
+v_1=\E_1(s_1+s_3+s_5+s_7),\qquad
+v_i=\E_i(v_{i-1}+s_i)\quad(2\le i\le8),
+\]
+then replaces \(s_1\) by \(s_1+v_8\) and \(s_i\) by
+\(s_i+v_{i-1}\) for \(i\ge2\).
+\begin{lemma}[Uniform state]\label{lem:uniform}
+For every fixed key, four initialization rounds permute the
+128-bit IV space. Independent uniform IVs therefore give
+independent uniform initialized state words.
+\end{lemma}
+\begin{proof}
+Given the output \(t\) of one round, invert in the order
+\[
+ s_1=t_1-\E_8(t_8),\quad
+ s_i=t_i-\E_{i-1}(t_{i-1})\ (i=8,\ldots,3),\quad
+ s_2=t_2-\E_1(s_1+s_3+s_5+s_7).
+\]
+Four bijections compose to a bijection.
+\end{proof}
+
+Let a block have \(B\) consecutive words. An input row consists
+of all its \(B\) words. The next lemma is the same induction at
+every quotient width used by the attack.
+\begin{lemma}[Perturbed blocks]\label{lem:block}
+Align a row with the first state addition. Write the intervening
+state additions before a chosen last rotor as \(Bh_i+e_i\), with
+signed residues \(e_i\), and put \(S=\sum_i|e_i|\).
+If the final state residue is \(b\), with
+\begin{equation}
+              S<\min(b,B-b),
+\label{eq:support}
+\end{equation}
+the two endpoints of the last quotient-cycle edge both occur in
+the row, with at least \(B-S\) points between them. At least
+\(B-S\) inverse images under the last rotor lie in one interval
+\([Bv+b,Bv+b+B-1]\). If
+\(2S<\min(b,B-b)\), the endpoints are the unique two largest
+quotient-label counts.
+\end{lemma}
+\begin{proof}
+After the first rotor, an aligned row fills one block. At the
+next translation, at most \(|e_i|\) distinct low coordinates cross
+a boundary. Discard them and apply the rotor; it permutes the
+remaining coordinates within a nominal block. Induction leaves
+at least \(B-S\) points, and the nominal block labels are a
+permutation of their original labels. The final addition by \(b\)
+splits the full nominal block into parts of sizes \(b,B-b\).
+Condition~\eqref{eq:support} leaves each part nonempty after the
+discarded points are removed. All retained points lie in the
+stated translated interval before the final rotor. If \(2S\)
+is below each part size, each intended label has more points
+than all the other labels combined, proving dominance.
+\end{proof}
+
+\section{A preliminary distinguisher}
+The block weakness already distinguishes SEPAR without numerical
+key recovery.
+\begin{theorem}[511-query distinguisher]\label{thm:dist}
+At one IV, query \(p=0,\ldots,510\), resetting before each query.
+Accept if some consecutive 256-input window has at most 128
+ciphertext high-byte values. Every SEPAR key and IV is accepted.
+A uniform random word permutation is accepted with probability
+at most \(1.762252054731\cdot10^{-9}<2^{-29}\).
+\end{theorem}
+\begin{proof}
+One of the 256 windows aligns \(p+s_1\) with a complete high-byte
+block. Equation~\eqref{eq:linear} makes the first rotor's high byte
+constant on it. Each of the seven later additions can split a
+high-byte block into at most two, while a rotor merely permutes
+the classes. Thus the ciphertext uses at most \(2^7\) high bytes.
+
+For the ideal permutation, let \(A_{r,k}\) count ordered selections
+of \(r\) distinct words occupying \(k\) high-byte classes. With
+\(A_{0,0}=1\) and infeasible entries zero,
+\[
+ A_{r+1,k}=A_{r,k}(256k-r)
+          +256(257-k)A_{r,k-1}.
+\]
+The two terms reuse a class or open a new one. Write
+\((a)_b=a(a-1)\cdots(a-b+1)\). The probability for one window is
+\[
+              \frac{\sum_{k\le128}A_{256,k}}{(65536)_{256}}.
+\]
+A union bound over the 256 windows and exact integer evaluation of
+this recurrence give the stated value.
+\end{proof}
+We now turn to complete key recovery.
+
+\section{Decoding a rotor from middle paths}\label{sec:decoder}
+This section supplies a numerical decoder shared by outer exposure
+and the inward factorization. For a rotor subkey write
+\(\kappa_j=(\alpha_j,\beta_j,\gamma_j,\delta_j)\). Define
+\[
+J^{u,v,w,t}(x)=
+S_3\!\left(S_1\!\left(S_3\!\left(S_1(S_3(x)\xor u)\xor v\right)
+\xor w\right)\xor t\right).
+\]
+Substitution into the four literal rounds yields
+\begin{align}
+M_b(c)&=(\gamma_2\xor\gamma_3)\xor
+       J^{u_b,v,w_b,t}(c\xor\gamma_0),\label{eq:middlecore}\\
+u_b&=S_2(b\xor\beta_0)\xor\alpha_1,\quad
+v=\gamma_2,\quad t=\gamma_0\xor\gamma_1,\nonumber\\
+w_b&=S_2(S_2(S_2(b\xor\beta_0)\xor\beta_1)\xor\beta_2)
+       \xor\alpha_3.\nonumber
+\end{align}
+Thus, for each output lane \(y=Q(b)+\lambda\bmod16\), the
+sequence \(M_b(0),\ldots,M_b(15)\) is a path through its sixteen
+vertices. Its orientation and the common cyclic lane translation
+\(\lambda\) may be unknown.
+
+For a nibble table \(f\), put
+\[
+ \pack(f)=\sum_{x=0}^{15}f(x)2^{4x},\qquad
+ \mathcal C(f)=
+ \min_{a=0}^{15}\pack\bigl(x\mapsto f(x\xor a)\xor f(a)\bigr).
+\]
+This canonicalizes input and output XOR. Reversing a path means
+\(c\mapsto15-c=c\xor15\), so it does not change the canonical value.
+Let \(I=S_2^{-1}\) and
+\begin{equation}
+F_{j,r,s}(y)=I(I(I(I(y\xor r\xor s)\xor j)\xor s)\xor r).
+\label{eq:laneinverse}
+\end{equation}
+Two finite identities, computed from the S-boxes printed above, are
+used throughout:
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+Family & Tables & Distinct signatures\\
+\midrule
+\(\mathcal C(J^{u,v,w,t})\) & 65536 & 65536\\
+\(\pack(y\mapsto F_{j,r,s}(y-\lambda)\xor
+ F_{j,r,s}(-\lambda))\) & 65536 & 65536\\
+\bottomrule
+\end{tabular}
+\end{center}
+The first calculation loops over all four nibbles
+\((u,v,w,t)\), evaluates all sixteen entries, and sorts their
+canonical 64-bit words. The second loops over
+\((j,r,s,\lambda)\), evaluates \eqref{eq:laneinverse} on all sixteen
+inputs, and sorts those packed words. Equality of adjacent sorted
+entries is the complete collision test. Seven first-family
+tables have a nonidentity input/output XOR stabilizer. These are
+exhaustive finite assertions, not estimates over master keys.
+
+\begin{theorem}[Forty numerical keys]\label{thm:forty}
+Sixteen supplied unoriented middle paths, indexed by output lane
+up to a common cyclic translation, determine at most forty raw
+32-bit rotor keys. The exact decoder emits all compatible keys and
+the compatible translation. It includes the true key for true paths.
+\end{theorem}
+\begin{proof}
+Canonicalize each path. The first finite identity determines its
+\((u_y,v_y,w_y,t_y)\); reject if the \(v_y,t_y\) disagree.
+The \(u_y\) must be distinct. Set
+\(j=\beta_0\xor\beta_1\), \(r=\beta_2\),
+\(s=\beta_3\), and \(\kappa=\beta_1\xor\alpha_1\).
+Inverting the autonomous output lane gives
+\[
+                  u_y=F_{j,r,s}(y-\lambda)\xor\kappa .
+\]
+The second finite identity applied to \(u_y\xor u_0\) fixes
+\((j,r,s,\lambda)\); \(u_0\) fixes \(\kappa\). Then
+\[
+ \alpha_3=w_y\xor S_2(S_2(u_y\xor\kappa)\xor r)
+\]
+must be the same in every lane.
+
+At least one path core has no nonidentity stabilizer: there are
+sixteen distinct \(u_y\) and only seven exceptional cores in the
+entire family. This path fixes \(\gamma_0\) up to reversal;
+the key schedule fixes \(\gamma_0\bmod4=r\gg2\), choosing one
+orientation. Equation~\eqref{eq:middlecore} then fixes \(\gamma_3\).
+The implementation checks the equations on every row, so it
+does not select a special row or key value.
+
+Write \(g(x)=x\OR S_1(x)\). The schedule gives
+\[
+ \beta_1\gg2=\gamma_3\mathbin{\&}3,\quad
+ g(\alpha_1)=(\gamma_3\gg2)+4(s\mathbin{\&}3),\quad
+ \alpha_1=\beta_1\xor\kappa .
+\]
+For each fixed upper two bits, every fibre of \(g\) has size at most
+two, as is checked directly from
+\[
+(g(0),\ldots,g(15))=
+(1,15,11,3,4,7,7,15,14,9,14,15,13,15,14,15).
+\]
+There are therefore at most two \(\beta_1\), four lower-two-bit
+choices for \(\alpha_0\), and five choices for \(\delta_0\)
+after its \(g\)-value is fixed. The remaining raw-key nibbles
+follow from the displayed schedule. Checking the complete paths
+leaves at most \(2\cdot4\cdot5=40\) keys, all of which are emitted.
+\end{proof}
+
+For a complete quotient cycle let
+\(q_K(x)=\E_K(16x)\gg4\). A translated cycle has order
+\begin{equation}
+ q_K(\varepsilon x+a)+h\pmod {4096},
+ \qquad \varepsilon\in\{1,-1\},
+\label{eq:cycle}
+\end{equation}
+up to its cyclic starting point. Try \(h\bmod16\), reduce the
+result modulo 256, and extract its sixteen middle paths.
+Theorem~\ref{thm:forty} fixes \(h/16\bmod16\).
+For each emitted key, try the sixteen remaining top-nibble
+translations and compare all 4096 entries in both directions.
+This finite procedure emits every compatible numerical rotor and
+full quotient translation; it has no ranking cutoff.
+
+\section{Recovering the outer rotor}\label{sec:outer}
+We use every pair of quotient labels supported by a row.
+This avoids a dominance assumption: false edges may enter the
+graph, but the true path remains.
+
+Align a row of sixteen plaintexts at \(r=-s_1\bmod16\).
+For \(i=2,\ldots,7\), write \(s_i=16h_i+e_i\), using signed
+residues, and let \(S=\sum_{i=2}^7|e_i|\).
+Put \(b=s_8\bmod16\). The outer event is
+\begin{equation}
+                    S<\min(b,16-b).
+\label{eq:outerevent}
+\end{equation}
+The condition itself forces \(S\le7\), so no separate norm cutoff
+is needed. A signed residue with \(|e_i|\le7\) has a unique
+representative modulo sixteen.
+
+\begin{theorem}[Supported outer paths]\label{thm:outer}
+On event~\eqref{eq:outerevent}, a public graph made from 256 aligned
+16-point rows contains all fifteen internal edges of each of the
+sixteen true middle paths of \(K_8\). Enumerating graph paths,
+decoding them by Theorem~\ref{thm:forty}, and applying the common
+carry test below retains the true numerical \(K_8\).
+The event has exact probability
+\begin{equation}
+                     p_{\rm out}=\frac{48639}{16^7}
+                     =0.00018119439482688904
+\label{eq:pout}
+\end{equation}
+for every fixed master key.
+\end{theorem}
+\begin{proof}
+Lemma~\ref{lem:block} says that each row contains two adjacent
+outer quotient labels with combined count at least \(16-S\ge9\).
+Project a top-twelve-bit label modulo 256, and join any two
+distinct observed labels in the same output lane whose counts
+sum to at least nine. This can add false edges, but never removes
+either endpoint of a true internal edge. For the 256 successive
+aligned input rows, the nominal middle-byte label before the final
+addition runs once through all 256 values: each prior rotor's
+middle quotient is a permutation, and each aligned quotient
+translation is also a permutation. The true internal edges
+therefore all appear. Edges crossing output-lane boundaries are
+unneeded for the sixteen paths.
+
+The implementation first enumerates paths in a lane with the
+fewest observed edges. A completed path determines its unique
+core \((u,v,w,t)\). Testing its sixteen input XORs determines each
+possible common external input/output XOR pair. For every other
+lane, equation~\eqref{eq:middlecore} then leaves only the
+\(16^2\) choices of \((u,w)\) with the fixed common \((v,t)\).
+Test their fifteen edges and require distinct \(u\)'s. This
+finite completion includes the true paths, even when the graph
+has extra edges; it imposes no path-count limit. Applying
+Theorem~\ref{thm:forty} to every completed path set includes
+the true raw rotor key.
+
+For the numerical row test, invert a candidate \(K_8\) on each
+of the 256 rows. For a proposed last residue \(b\), count
+inverse images in the disjoint intervals
+\([16v+b,16v+b+15]\). Keep \(b\) if every row has at least
+\begin{equation}
+                    17-\min(b,16-b)
+\label{eq:carrytest}
+\end{equation}
+images in one such interval. The same \(b\) must work for all
+rows. On the event, \(S\le\min(b,16-b)-1\), so
+Lemma~\ref{lem:block} gives at least \(16-S\) images in the
+true interval, which meets \eqref{eq:carrytest}.
+All keys passing this exact necessary test are retained.
+
+For the count, let \(a_d(s)\) be the number of \(d\)-dimensional
+signed residue vectors of absolute norm \(s\). Then
+\[
+a_d(0)=1,\qquad
+a_d(s)=\sum_{j=1}^{\min(d,s)}
+2^j \binom dj\binom{s-1}{j-1}\quad(s>0).
+\]
+Choose the \(j\) nonzero coordinates, their signs, and a positive
+composition of \(s\). For a fixed \(s\le7\), exactly \(15-2s\)
+values of \(b\) obey \eqref{eq:outerevent}. Hence
+\[
+\sum_{s=0}^7 a_6(s)(15-2s)
+=15+156+792+2628+6384+11820+16008+10836
+=48639.
+\]
+Lemma~\ref{lem:uniform} divides this count by \(16^7\).
+\end{proof}
+
+The public screen samples 31 consecutive words at each of twelve
+fixed input positions. Every candidate alignment has a complete
+row in a 31-word strip, and on the event its two supported labels
+sum to at least nine. Thus any one strip preserves its alignment.
+The twelve strips only reject more IVs before the 4111-word
+partial codebook is requested. That codebook contains all 256
+rows for every alignment. The screen does not inspect a key or a
+hidden state.
+
+\section{One inward factorization}\label{sec:inward}
+Write each state word \(s_i=b_i+256h_i\), \(0\le b_i,h_i<256\),
+and let \(h_9=0\). Define the translated prefix
+\[
+                       C_t(p)=R_t(p)+256h_{t+1}.
+\]
+It obeys the same step at every stage:
+\begin{equation}
+ C_{t-1}(p)=\D_t(C_t(p)-256h_{t+1})-b_t.
+\label{eq:pivot}
+\end{equation}
+Indeed, substitution leaves \(R_{t-1}(p)+256h_t\).
+The pivot's output translation only shifts quotient labels:
+\[
+\left\lfloor\frac{C_t(p)}{16}\right\rfloor
+=\left\lfloor\frac{R_t(p)}{16}\right\rfloor+16h_{t+1}
+\pmod {4096}.
+\]
+It preserves the low-nibble block partition used above.
+
+For each \(t=6,5,4,3\), define the inward event \(E_t\):
+all low-nibble residues \(s_2,\ldots,s_6\) vanish except
+\(s_t\bmod16=e_t\), where \(e_t\) is signed with
+\(1\le|e_t|\le3\), and
+\begin{equation}
+           2|e_t|<b_7<16-2|e_t|,
+           \qquad b_7=s_7\bmod16.
+\label{eq:inner}
+\end{equation}
+Here \(s_1\) is handled by an unknown row alignment. For
+each \(t\), the choices of \((e_t,b_7)\) number
+\(2(11+7+3)=42\), so
+\begin{equation}
+                  q=\Pr(E_t)=42/16^6.
+\label{eq:q}
+\end{equation}
+The four events are disjoint because their sole nonzero residue
+is in a different state word.
+
+Under any \(E_t\), Lemma~\ref{lem:block} exposes a translated
+stage-seven quotient cycle. Trying the sixteen possible low
+output residues and row alignments, the complete-cycle decoder
+of Section~\ref{sec:decoder} includes \(K_7\) and its output
+translation \(s_8\). The implementation first checks 256
+partial rows, then asks for the full first-word codebook only
+when a compatible numerical candidate and one next-stage
+graph remain. Every test is a necessary condition on the
+sufficient event. The full row test keeps every compatible
+state residue; it does not retain just the best one.
+The saved public context is
+\begin{equation}
+                 Y(p)=\D_7(\D_8(C(p))-s_8)=R_6(p)+s_7,
+\label{eq:context}
+\end{equation}
+together with its IV, alignment, and admissible low residues
+of \(s_7\).
+
+For \(E_6\), inverting the recovered \(K_7\) exposes the
+translated stage-six cycle as well. The exact cycle decoder
+and full row test give seed pairs \((K_7,K_6)\).
+Numerical suffixes obtained from one IV are pooled across all
+saved contexts. The true suffix can therefore be extended using
+a different IV for each inward event. All state offsets stay
+with the IV from which they were obtained.
+
+\subsection{The partition join}
+Let \(q_j(x)=\E_j(16x)\gg4\) be the 4096-point quotient of
+rotor \(j\), and let \(\Tr_a(x)=x+a\pmod {4096}\).
+Suppose \(K_{t+1},\ldots,K_6\) are known and put \(d=6-t\),
+so \(d\in\{1,2,3\}\). Under \(E_t\), the quotient walk of a
+compatible context has the form
+\begin{equation}
+ W=\Tr_{\eta_d}q_{t+d}\Tr_{\eta_{d-1}}q_{t+d-1}
+       \cdots \Tr_{\eta_1}q_{t+1}\Tr_{\eta_0}q_t,
+\label{eq:walk}
+\end{equation}
+up to a cyclic input origin and direction. The \(\eta_j\)
+are the state quotient translations carried by
+\eqref{eq:pivot}; all are enumerated. The only nonaligned
+low-nibble addition is the small \(e_t\), which creates the
+two-label row edges. Every known quotient and translation
+in \eqref{eq:walk} permutes the middle byte.
+
+For \(0\le j\le d\), put
+\(m_j(x)=q_{t+j}(x)\bmod256\) on \(0\le x<256\).
+Lemma~\ref{lem:triangular} makes this the complete middle-byte
+quotient, independent of the input top nibble.
+Let \(\calP\) partition \(\{0,\ldots,255\}\) into its sixteen
+consecutive 16-point blocks. For any 256-point permutation
+\(f\), \(f(\calP)\) means the unordered set of image blocks.
+Write \(m_j\) for the middle-byte quotient of the corresponding
+\(q_j\). The exact join uses the identity
+\begin{equation}
+\left(\Tr_{-z}m_d^{-1}\Tr_{-h}W\Tr_a\right)(\calP)
+=
+\left(\Tr_{16H}m_{d-1}\Tr_{\theta_{d-2}}\cdots
+       m_1\Tr_f\right)(\calP).
+\label{eq:partition}
+\end{equation}
+All maps in this equation are reduced modulo 256.
+For \(d=1\), the right side is simply \(\calP\).
+Here \(h\in\{0,\ldots,255\}\) is the outer output
+translation, \(z,a,f,H\in\{0,\ldots,15\}\), and the
+\(\theta_j\in\{0,\ldots,255\}\) are inner translations
+that exist only at greater depth. The left side has
+\(256\cdot16\cdot16=65536\) choices; the right has
+respectively \(1,256,65536\) choices for depths \(1,2,3\).
+
+\begin{lemma}[Exact join]\label{lem:join}
+On the true branch of any \(E_t\), one pair of entries in
+\eqref{eq:partition} matches. The implemented join enumerates
+every matching pair, including \(f=0\). For each match, its
+middle-path and top-coordinate tests emit every compatible
+numerical \(K_t\) and quotient translation.
+\end{lemma}
+\begin{proof}
+Choose \(h,z,a\) to cancel the true outer translation and align
+the input origin with a block boundary. Undo the known outer
+\(m_d\). Decompose the next translation as \(z+16H\)
+and the translation next to \(m_t\) as \(f+16F\).
+Translations by multiples of sixteen preserve \(\calP\);
+\(m_t\) preserves \(\calP\) by Lemma~\ref{lem:triangular}.
+Moving those two factors inside the image of \(\calP\)
+gives exactly the right side of \eqref{eq:partition};
+the intervening 256-point translations are the
+\(\theta_j\). This argument does not require \(f\ne0\).
+
+The code encodes a partition by naming its sixteen blocks
+in order of first occurrence among output positions, then
+packs the 256 names into 128 bytes. Two codes are equal
+exactly when the unordered partitions are equal. It sorts
+the right family and compares full encodings, not hashes;
+every matching pair is processed. Undoing its known factors
+leaves the sixteen paths of an unknown middle map, with a
+common output-lane translation. Theorem~\ref{thm:forty}
+enumerates every matching numerical key.
+
+It remains to restore the top quotient nibble. Write
+\(q_j(256A+x)=256P_{j,x}(A)+m_j(x)\), with \(0\le A<16\).
+Once the middle trajectory is fixed, the carries at all
+known translations and the lane \(x\) of each known rotor
+are fixed. On the sixteen inputs with one chosen middle
+coordinate, the top trajectory is a composition of known
+nibble permutations \(P_{j,x}\) and the remaining unknown
+top-nibble additions. Split this composition in two.
+Enumerate the at most 256 offset choices on one side and
+the at most sixteen on the other; compare their complete
+16-entry maps up to cyclic input and output translations.
+For every equality, enumerate the sixteen input origins
+and compare all 4096 entries of \eqref{eq:walk}.
+The true offsets give an equality and pass that literal
+comparison. No match-count assumption is used.
+\end{proof}
+
+The same join is called for \(d=1,2,3\), yielding \(K_5,K_4,K_3\).
+After its quotient comparison, the code undoes the known
+full-word rotors and tests every aligned row against the
+candidate inner rotor's translated interval. On \(E_t\)
+there are no low-nibble perturbations before \(t\), so
+Lemma~\ref{lem:block} makes the true row test exact.
+Every surviving offset and key is emitted.
+
+\section{Initialization anchors and the first two rotors}
+The partition join stops at \(K_3\). The remaining two rotors
+are recovered from four rounds of initialization, without an
+unbounded search over the other state words.
+Let \(u_i^{(r)}\) be state word \(i\) after initialization round
+\(r\), with \(u_i^{(0)}=\mathrm{IV}_i\).
+Lemma~\ref{lem:uniform} gives, for \(i\ge3\),
+\begin{equation}
+ u_i^{(r-1)}
+=u_i^{(r)}-\E_{i-1}(u_{i-1}^{(r)}).
+\label{eq:cone}
+\end{equation}
+Known tail states and keys fill this inverse triangle.
+In particular, the four known tail states give
+\begin{equation}
+ s_1=\mathrm{IV}_1+
+       \sum_{r=1}^4\E_8(u_8^{(r)}).
+\label{eq:s1}
+\end{equation}
+
+For \(t=2,3,4\), the same triangle computes
+\(A_t=\E_t(s_t)\) from \(s_{t+1},\ldots,s_{t+4}\),
+\(K_{t+1},\ldots,K_{t+3}\), and \(\mathrm{IV}_{t+4}\),
+without consulting \(K_t\). To make the construction explicit,
+set \(a_{0,j}=s_{t+1+j}\) for \(0\le j\le3\), then
+\begin{equation}
+ a_{r,j}=a_{r-1,j}-
+ \E_{t+j}(a_{r-1,j-1}),
+ \qquad 1\le r\le j\le3.
+\label{eq:anchortriangle}
+\end{equation}
+Induction using \eqref{eq:cone} gives
+\(a_{r,j}=u_{t+1+j}^{(4-r)}\). Starting from
+\(x=\mathrm{IV}_{t+4}\), replace
+\(x\leftarrow\D_{t+j}(a_{j,j}-x)\) for \(j=3,2,1\).
+The result is the previous-round value feeding \(s_{t+1}\),
+so \(A_t=s_{t+1}-x\).
+
+Once \(K_3,s_4,\ldots,s_8\) are known on a true branch,
+\eqref{eq:s1} and \(A_3\) give \(s_1\) and
+\(s_3=\D_3(A_3)\). The triangle gives \(A_2\).
+Undo the known rotors to obtain the complete public table
+\begin{equation}
+ R_2(p)=\E_2\bigl(\E_1(p+s_1)+s_2\bigr),
+ \qquad A_2=\E_2(s_2).
+\label{eq:pair}
+\end{equation}
+The final sufficient event also requires
+\(s_2\bmod256\ne0\), with independent conditional
+probability \(15/16\).
+
+\begin{lemma}[Anchored pair retention]\label{lem:pair}
+Given the correct \(R_2\) table, \(s_1,A_2\), and
+\(s_2\bmod256\ne0\), the finite pair decoder emits the
+true \((K_1,K_2,s_2)\). It then checks the complete
+word table and the literal IV initialization.
+\end{lemma}
+\begin{proof}
+Align the 256-point input high-byte rows by \(s_1\).
+The first rotor maps each row to one high-byte class.
+Adding a nonzero low byte of \(s_2\) splits it between two
+adjacent classes, and the second rotor permutes those
+classes. Thus every row has exactly two high-byte labels.
+The resulting 256 edges trace the high-byte quotient
+cycle of \(\E_2\), with the common split count giving
+\(s_2\bmod256\).
+
+The unique preimage of \(A_2\) in \eqref{eq:pair}
+is the row where the first rotor output is zero.
+It anchors the cycle origin and orientation. The
+aligned row labels then give the first rotor's complete
+high-byte quotient, while the anchored cycle gives
+the second rotor's high-byte quotient up to one of
+256 input origins. The decoder enumerates every such
+origin. For each proposed quotient, it enumerates the
+raw-key lifts and checks its complete 256-entry truth
+table; the true raw key is among them by construction.
+
+For clarity, the finite high-byte decoder uses the
+autonomous \(Q\) of Lemma~\ref{lem:triangular} and two
+top-coordinate rows \(P_b\). Put
+\(p_0(b)=S_2(b\xor\beta_0)\) and
+\(p_j(b)=S_2(p_{j-1}(b)\xor\beta_j)\) for \(j=1,2,3\).
+Direct substitution gives
+\[
+ Q(b)=S_2(p_3(b)\xor\beta_0\xor\beta_1)
+            \xor\beta_2\xor\beta_3.
+\]
+Its 65536 possible 16-entry tables are distinct.
+The top rows are XOR translates of
+\[
+ J_P^{u,v,w,t}(x)
+=S_1(S_3(S_1(S_3(S_1(x)\xor u)\xor v)\xor w)\xor t),
+\]
+with
+\[
+ (u,v,w,t)=
+ (\gamma_1,\alpha_2\xor p_1(b),\gamma_3,
+  \alpha_0\xor\alpha_1\xor p_3(b)).
+\]
+Exhaustively canonicalizing these 65536 nibble tables
+under input/output XOR gives 65535 orbits: one two-core
+collision and three self-stabilizing cores. The five
+exceptional cores have distinct \((u,w)\) pairs.
+The two rows \(b=0,1\) share \((u,w)\) but have different
+\(v\), since \(p_1\) is a permutation. Thus at least
+one row is nonexceptional and fixes its core and
+external XORs. The raw schedule then leaves at most
+sixteen low-nibble choices, all scanned. These finite
+facts are reproduced by evaluating the printed
+16-entry formulas over their complete parameter
+ranges and sorting the resulting packed truth tables.
+
+For the first rotor there are at most sixteen such
+raw lifts; for the second there are at most
+\(256\cdot16=4096\) origin/lift pairs. The decoder
+checks each pair against all 65536 entries of
+\eqref{eq:pair}, then checks the eight initialized
+state words against the supplied IV. The true pair
+passes every comparison.
+\end{proof}
+
+\section{True-key survival}\label{sec:bounds}
+The attack has one induction. Acquire outer IVs
+until the fixed budget has been examined; retain every outer
+numerical key from Section~\ref{sec:outer}. For each such key,
+acquire the fixed inward budget, save every stage-seven
+context, and pool every seed pair. Apply the same partition
+join at depths one, two, and three. At each leaf, use the
+initialization anchors and anchored pair decoder, then
+replay every complete key against every saved public
+codebook. No score, candidate cap, or choice of a single
+state branch occurs in this induction.
+
+\begin{theorem}[True-key coverage]\label{thm:coverage}
+For every fixed 256-bit master key, use \(m\) independent
+uniform outer IVs and \(N\) independent uniform inward IVs
+for each outer candidate. The probability that the final
+list omits the true master key is at most
+\begin{equation}
+ \epsilon(m,N)
+=\left(1-\frac{48639}{16^7}\right)^m
+ +3\left(1-\frac{42}{16^6}\right)^N
+ +\left(1-\frac{630}{16^7}\right)^N .
+\label{eq:epsilon}
+\end{equation}
+At \(m=132000\), \(N=8000000\), this is
+\begin{equation}
+             \epsilon(m,N)
+             =1.30716322171\cdot10^{-8}
+             <1.4020\cdot10^{-8}.
+\label{eq:number}
+\end{equation}
+The bound concerns inclusion of the true key in the
+returned list.
+\end{theorem}
+\begin{proof}
+By Theorem~\ref{thm:outer}, one outer event retains
+the true \(K_8\). On that branch, \(E_6\) retains the
+true seed \((K_7,K_6)\), and \(E_5,E_4,E_3\) extend
+the true numerical suffix in turn. The proof of
+Lemma~\ref{lem:join} includes zero translations, so
+there is no further state condition at \(E_4\).
+For \(E_3\), Lemma~\ref{lem:pair} adds
+\(s_2\bmod256\ne0\). Given \(E_3\), its upper
+four bits of the low byte are unrestricted and
+uniform by Lemma~\ref{lem:uniform}; this adds the
+factor \(15/16\), giving \(42\cdot15/16^7
+=630/16^7\). The correct branch passes literal
+initialization and all public-ciphertext replay.
+
+The absence probabilities for the outer event and
+the four inward event families are respectively
+\((1-p_{\rm out})^m\),
+\((1-q)^N\) three times, and
+\((1-630/16^7)^N\). Union bound them.
+Independence among the different families is not
+assumed. False branches can increase work but cannot
+remove the true branch because every compatible
+candidate is processed.
+\end{proof}
+\[
+\boxed{\Pr\{\text{true master key is returned}\}
+       \ge 1-1.30716322171\cdot10^{-8}.}
+\]
+
+\begin{thebibliography}{9}\small
+\bibitem{separ} A. Vahi and S. Jafarali Jassbi.
+SEPAR: A New Lightweight Hybrid Encryption Algorithm with a Novel
+Design Approach for IoT. \emph{Wireless Personal Communications}
+114, 2283--2314, 2020.
+\href{https://doi.org/10.1007/s11277-020-07476-y}
+{doi:10.1007/s11277-020-07476-y}.
+\end{thebibliography}
+\end{document}
