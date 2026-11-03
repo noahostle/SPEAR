@@ -1,1 +1,3 @@
-[REDACTED]
+#define OUTER_IVS 4205000u
+#define INWARD_IVS 7900000u
+#define ROW_ERRORS 3u

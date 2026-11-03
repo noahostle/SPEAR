@@ -1,1 +1,1582 @@
-[REDACTED]
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,amsmath,amssymb,amsthm,booktabs,microtype}
+\usepackage{tikz}
+\usepackage{lmodern}
+\usepackage[mode=tex]{standalone}
+\usepackage{pgfplots}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{enumitem}
+\setlist{itemsep=3pt,topsep=5pt}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{pgfplots}
+\usepgfplotslibrary{groupplots}
+\usetikzlibrary{calc}
+\pgfplotsset{compat=1.18}
+\definecolor{budgetblue}{RGB}{33,79,114}
+\definecolor{budgetreference}{RGB}{181,72,42}
+
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={On the Weak Diffusion of the SEPAR cipher},pdfauthor={Noah Ostle}}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newcommand{\E}{\mathcal E}
+\newcommand{\D}{\mathcal D}
+\newcommand{\xor}{\mathbin\oplus}
+\newcommand{\OR}{\mathbin{\mathrm{OR}}}
+\newcommand{\rol}{\operatorname{rol}_{16}}
+\newcommand{\pack}{\operatorname{pack}}
+\newcommand{\calP}{\mathcal P}
+\newcommand{\Tr}{\operatorname T}
+\setlength\parindent{0pt}
+
+\title{On the Weak Diffusion of the SEPAR Cipher}
+\author{Noah Ostle}
+\date{Under supervision of Dr. Luke Mathieson, UTS School of Computer Science}
+\begin{document}
+\maketitle
+\begin{abstract}
+	
+SEPAR encrypts each 16-bit plaintext word through eight keyed permutations,
+called rotors, each preceded by a state addition. Each rotor uses a 32-bit
+segment of the master key. We show that poor diffusion in the rotor's linear
+layer preserves classes of inputs throughout the rotor. Under suitable IVs,
+the ciphertext reveals the cyclic order of these classes. The main result
+is a search that turns this order into rotor key candidates. Applying it
+successively gives a chosen IV, chosen plaintext attack on the full 256-bit
+master key.
+
+For the stated sampling budgets, the returned list contains the true key
+with probability at least
+\(1-1.663852\times10^{-8}\approx99.99999834\%\). In 500 trials, the C
+implementation returned a single key every time, using an average of
+\(2^{27.83}\) queries and 81.48 seconds on one thread of an AMD Ryzen 9
+8945HS processor. A general bound on the number of surviving candidates
+remains open.
+\end{abstract}
+
+\newpage
+
+\section{Prior Work}\label{sec:literature}
+\subsection{Existing Security Analysis}
+SEPAR was proposed by Arsalan Vahi and Somaye Jafarali Jassbi in
+\emph{Wireless Personal Communications}~\cite{separ}. We examine the
+proposal's security claims and the later differential analysis by Vahi
+and Mirnia~\cite{separ-differential}.\\
+
+Vahi and Mirnia's \emph{On the Differential Cryptanalysis of SEPAR
+Cipher} is a 2021 preprint extending the analysis in the published SEPAR proposal.
+Its aim is to justify resistance to differential cryptanalysis by
+counting active S-boxes. Table II of that study reports maximum
+differential counts \(16370,1016,84,22,22\) for zero through four
+\texttt{b16} layers. Table III lists seven input and output difference
+pairs. In Section III-B, Vahi and Mirnia claim at least ten active
+S-boxes across four \texttt{b16} layers, then at least eighty across
+eight Enc-blocks. Using a maximum S-box transition probability of
+\(2^{-2}\), they derive
+\[
+                         (2^{-2})^{80}=2^{-160}.
+\]
+They present this as evidence of resistance to differential attack.\\
+
+The argument combines a bound on individual S-box transitions with a
+count of the S-boxes through which a difference must pass. The first
+comes from the substitution tables, and the second depends on the linear
+layer.\\
+
+In their terminology, a \texttt{b16} is one internal substitution and
+mixing layer. An Enc-block is a complete rotor. Their active S-box
+argument means to extend the analysis of one Enc-block to the eight rotors used
+to encrypt each block.
+
+\subsection{Active S-boxes}
+For a function \(F\) on \(n\)-bit words, define its difference count by
+\[
+D_F(\alpha,\beta)
+ =\#\{x:F(x)\xor F(x\xor\alpha)=\beta\}.
+\]
+For uniform \(x\), the corresponding differential probability is
+\(D_F(\alpha,\beta)/2^n\). An S-box is \emph{active} when its input
+difference is nonzero. XOR with the subkey does not change that
+difference. Substitution changes its value, and the linear layer
+determines where it spreads.\\
+
+For a 4-bit S-box, the stated maximum probability \(2^{-2}\)
+corresponds to a difference count of 4 among 16 possible
+inputs. The linear layer determines
+how many of these substitutions a difference reaches in later layers.\\
+
+A \emph{differential characteristic}, also called a trail, specifies
+the differences at intermediate stages as well as at the endpoints.
+Its probability is commonly estimated by multiplying the S-box transition
+probabilities along it. Whether this product gives a bound depends on
+the dependencies between the transitions.\\
+
+A differential fixes only the input and output differences. For a
+fixed key, its probability sums over all compatible intermediate
+trails. Thus a bound on individual trails must account for their combined
+probability before it can bound a differential. This distinction matters
+when interpreting Vahi and Mirnia's \(2^{-160}\) estimate.\\
+
+\subsection{The diffusion claim}
+Section III-B of Vahi and Mirnia's paper starts from the seven difference
+pairs in their Table III, which they describe as results of an exhaustive
+search for high probability characteristics~\cite{separ-differential}.
+Table~\ref{tab:prior-pairs} gives these pairs in hexadecimal, with one
+digit for each nibble. The last column counts the nonzero input nibbles.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{cccc}
+\toprule
+Pair & Input difference & Output difference & Nonzero input nibbles\\
+\midrule
+1 & \texttt{0424} & \texttt{2A5A} & 3\\
+2 & \texttt{0494} & \texttt{2A5A} & 3\\
+3 & \texttt{0704} & \texttt{5D93} & 2\\
+4 & \texttt{0B24} & \texttt{2A5A} & 3\\
+5 & \texttt{0B94} & \texttt{2A5A} & 3\\
+6 & \texttt{0E04} & \texttt{5D93} & 2\\
+7 & \texttt{CC80} & \texttt{61E6} & 3\\
+\bottomrule
+\end{tabular}
+\caption{The endpoint differences in Vahi and Mirnia's Table III for an
+Enc-block with four \texttt{b16} layers~\cite{separ-differential}.
+The nibble counts in the last column were calculated based on their results.}
+\label{tab:prior-pairs}
+\end{table}
+
+Their proof assigns contributions of three and four active S-boxes to the
+first and last layers, then considers totals \(i=3,4,5\) in the two middle
+layers. For \(i=3\), the proposed patterns are
+\[
+ 3+2+1+4=10,\qquad 3+1+2+4=10.
+\]
+For \(i=4\), they give \(3+2+2+4\), \(3+1+3+4\), and
+\(3+3+1+4\), each totalling eleven. The smallest total is ten, which they multiply by eight to
+obtain eighty active S-boxes for the cipher~\cite{separ-differential}.\\
+
+The analysis does not establish why the
+first and last contributions must be three and four, or why the two
+middle layers must contribute at least three. To prove the minimum,
+the argument must rule out every pattern with fewer than ten active
+S-boxes. Listing several patterns whose totals are ten or more does
+not do this. The positions of the active nibbles matter as well as
+their number, since different positions can propagate differently
+through the same linear layer.\\
+
+There is already a problem with inferring the first contribution from
+the reported pairs; inputs \texttt{0704} and \texttt{0E04} have only two
+nonzero nibbles. Each therefore activates two S-boxes in the first
+substitution layer. All seven output differences have four nonzero
+nibbles, but an output difference does not specify the inputs to the
+last \texttt{b16} layer.\\
+
+More generally, the two endpoints of a differential do not determine its
+intermediate trail. Table III gives neither those intermediate differences
+nor a probability for each listed pair. The table alone therefore cannot
+establish the proposed activity patterns or show that the minimum is
+attained. Although Section III-A mentions mixed-integer linear programming
+in SageMath as a way to count active S-boxes, the SEPAR argument presented
+in Section III-B is the by-hand count above, and no model
+or solver result is supplied~\cite{separ-differential}.\\
+
+
+To add confidence to the notion that these estimations are not strong evidence for differential resistance, Section~\ref{sec:diffusioncheck} gives a counterexample as the rotor in
+the authors' code admits a trail with only four active S-boxes across
+its four internal layers.\\
+
+
+
+\subsection{Interpreting the reported differential counts}
+Table II of the preprint reports the results reproduced in
+Table~\ref{tab:prior-counts}. Section III attributes this numerical study
+to the earlier SEPAR proposal. The authors interpret the unchanged maximum
+at three and four \texttt{b16} layers as evidence that four layers provide
+sufficient resistance to differential cryptanalysis~\cite{separ-differential}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{crr}
+\toprule
+\texttt{b16} layers & Reported maximum count & Count divided by \(2^{16}\)\\
+\midrule
+0 & 16370 & 0.249786\\
+1 & 1016  & 0.015503\\
+2 & 84    & 0.001282\\
+3 & 22    & 0.000336\\
+4 & 22    & 0.000336\\
+\bottomrule
+\end{tabular}
+\caption{Counts from Vahi and Mirnia's Table II~\cite{separ-differential}.
+The last column divides each count by \(2^{16}\), to six decimal places.
+These are differential probabilities if the counts use all input words.}
+\label{tab:prior-counts}
+\end{table}
+
+The method used to obtain the reported maximum of 22 is unclear.\\
+
+Under the definition of \(D_F\) above, an exhaustive calculation for one
+fixed key would first evaluate the Enc-block on all 65536
+inputs. For each nonzero input difference \(\alpha\), it would then count
+the values of
+\[
+ F(x)\xor F(x\xor\alpha),\qquad 0\le x<65536.
+\]
+
+
+The preprint gives no search code, tested key values, or explicit ranges for the input words
+and differences. It is therefore unclear whether the reported maxima
+cover every input difference for one key, several keys, or any other
+set of cases.\\
+
+If all input words are counted, 22 corresponds to
+\[
+ \frac{22}{65536}\approx0.00033569\approx2^{-11.54}
+\]
+for one 16-bit component. The seven pairs in Table III have no accompanying
+counts, leaving their relation to this maximum unclear.\\
+
+The entry for zero layers gives another check. If it
+means removing the \texttt{b16} boxes from Figure 2 while retaining the
+final substitution and key XORs, the stated S-box maximum of four gives
+\[
+ 4\cdot16^3=16384.
+\]
+This differs from the reported value of 16370.\\
+
+There is further ambiguity in the implementation. Section II-B lists
+four S-boxes but says that the implementation uses one S-box in place of
+four different ones~\cite{separ-differential}. The reference code examined
+here uses the four distinct tables. We use that reference implementation
+throughout this paper.\\
+
+
+Section~\ref{sec:diffusioncheck} derives a lower bound on the maximum
+difference count for this rotor by counting its possible output
+differences. This gives a direct comparison with the reported maximum.
+
+\subsection{Gaps in the current analysis}
+The missing analysis of the linear layer even where it applies to the differential resistance measured by the authors is what initially motivated this work. The following section will show that a thorough linear analysis of SEPAR reveals critical weaknesses.
+
+\newpage 
+
+\section{SEPAR's design and the attack model}\label{sec:model}
+SEPAR encrypts 16-bit plaintext words sequentially using a 256-bit master key, with a state that includes a Linear Feedback Shift Register. The algorithm is designed for constrained devices, such as Internet of Things (IoT) devices. The authors report throughput improvements of up to 42.22\% over BORON and 98.01\% over PRESENT in some contexts~\cite{separ}. We examine its security under chosen IV and chosen plaintext queries.
+
+\subsection{Definitions}\label{definitions}
+For each 16-bit (\textit{or word}) block, there are \(2^{16}=65536\) possible values.
+A \emph{rotor} as it is called by the authors, is the keyed permutation applied 8 times to a word as it passes through
+SEPAR's encryption \emph{cascade}.\\
+
+Each rotor maps the $2^{16}$ inputs bijectively onto the $2^{16}$ outputs.
+Its key determines the mapping, and each of the eight rotors uses a
+disjoint 32-bit segment of the master key.
+The permutation has
+an \emph{inverse}, which recovers the input from the output given the
+rotor key. Decryption uses this inverse.\\
+
+Each rotor is itself built from a sequence of
+substitution, transposition, and bitwise operations, described in later sections, and between each rotor in the cascade is a state addition.\\
+
+A \emph{codebook}
+will refer to a table of queried plaintext words and their corresponding
+ciphertext words under one IV. A full codebook contains all 65536
+input words, and a partial codebook contains only the queried subset.\\
+
+\textit{Resetting} the cipher clears the current state and computes new state words from the
+128-bit \emph{initialisation vector} (IV) through rotor operations keyed by the master key.
+This computation of the state before the first word will be referred to as \emph{initialisation}.\\
+
+This paper will examine the cipher under the Chosen IV, Chosen Plaintext attack model.
+Under this model, the attacker can choose an IV and a plaintext and obtain the first
+ciphertext word, with a reset before each query. This will be referred to as 'querying the oracle'. Under this model, our \emph{oracle} is an interface that
+answers chosen queries without revealing any internal information - it accepts plaintext and an IV, and responds with only ciphertext. This is akin to a real world scenario where an attacker can query a device or service using the SEPAR protocol, assuming the implementation allows them to supply their own IV and plaintext.\cite{hac}\\
+
+\textit{All word additions and subtractions are modulo \(2^{16}\) unless stated otherwise.}\\
+
+\subsection{The rotor permutation}
+
+
+First, write a word as four
+nibbles \((a,b,c,d)\), from most to least significant. A nibble contains
+four bits, for example, \texttt{0x1234} has nibbles \(1,2,3,4\).\\
+
+The high byte is \((a,b)\), the middle byte is \((b,c)\),
+and the low byte is \((c,d)\) (\textit{Note that these overlap}).\\
+
+SEPAR's 4 S-boxes are substitution tables that work on the sixteen nibble values.
+Let
+\(\Sigma\) apply the four S-boxes in parallel. Their entries are:
+\[
+\begin{array}{c|*{16}{c}}
+P&0&1&2&3&4&5&6&7&8&9&A&B&C&D&E&F\\
+S_1&1&F&B&2&0&3&5&8&6&9&C&7&D&A&E&4\\
+S_2&6&A&F&4&E&D&9&2&1&7&C&B&0&3&5&8\\
+S_3&C&2&6&1&0&3&5&8&7&9&B&E&A&D&F&4\\
+S_4&D&B&2&7&0&3&5&8&6&C&F&1&A&4&9&E
+\end{array}
+\]\\
+
+Rotor \(i\) (of which there are 8 applied to the plaintext block per encryption) has a 32-bit key which is divided into two 16-bit keys \(K_i=(k_{i,0},k_{i,1})\).
+The \emph{key schedule} derives the values used in its internal
+layers from these two words. Write \(\rol(u,r)\) for a 16-bit left rotation.\\
+
+The four rotor subkeys are defined as:
+\[
+\begin{split}
+G(u)&=u\OR\bigl(S_1((u\gg6)\mathbin{\&}15)\ll6\bigr),\\
+\kappa_0&=k_{i,0},\qquad \kappa_1=k_{i,1},\\
+\kappa_2&=G(\rol(k_{i,0},6))\xor(i+2),\\
+\kappa_3&=G(\rol(k_{i,1},10))\xor(i+3).
+\end{split}
+\]\\
+
+The linear layer $L$ is the starting point of the attack.\\
+
+ 
+Here ``linear'' means that applying the layer to an XOR of two inputs
+gives the XOR of their separate outputs:
+\(L(x\xor y)=L(x)\xor L(y)\).\\
+
+The linear layer mixes input bits so that later S-boxes combine
+information from different parts of the word.\\
+
+Let \((a,b,c,d)\) be the four nibbles entering the linear layer, after substitution.\\
+
+The linear layer, which applies to the 16-bit plaintext word, made of four nibbles $P = a,b,c,d$ defines:
+\[
+\begin{aligned}
+	A&=a\oplus c,\\
+	B&=b\oplus d,\\
+	C&=c\oplus B=c\oplus b\oplus d,\\
+	D&=d\oplus A=d\oplus a\oplus c
+\end{aligned}
+\]
+then, after
+\(w=A\|B\|C\|D\), L is defined as; \[
+L(a,b,c,d)=w\oplus\rol(w,8)\oplus\rol(w,12). \]
+
+Expanding the XORs and rotations in this formula reveals cancellations
+that undo much of the mixing.\\
+
+Writing their formula for $L$ out in terms of nibbles;
+\[
+\rol(w,8)=(C,D,A,B),\qquad
+\rol(w,12)=(D,A,B,C).
+\]
+and therefore;
+\[
+L(a,b,c,d)=
+\bigl(
+A\oplus C\oplus D,\;
+B\oplus D\oplus A,\;
+C\oplus A\oplus B,\;
+D\oplus B\oplus C
+\bigr).
+\]
+
+Substituting back in the defined values for $A, B, C$ and $D$;
+\[
+\begin{aligned}
+	A\oplus C\oplus D
+	&=(a\oplus c)\oplus(c\oplus b\oplus d)
+	\oplus(d\oplus a\oplus c)\\
+	&=b\oplus c,\\[4pt]
+	B\oplus D\oplus A
+	&=(b\oplus d)\oplus(d\oplus a\oplus c)
+	\oplus(a\oplus c)\\
+	&=b,\\[4pt]
+	C\oplus A\oplus B
+	&=(c\oplus b\oplus d)\oplus(a\oplus c)
+	\oplus(b\oplus d)\\
+	&=a,\\[4pt]
+	D\oplus B\oplus C
+	&=(d\oplus a\oplus c)\oplus(b\oplus d)
+	\oplus(c\oplus b\oplus d)\\
+	&=a\oplus d.
+\end{aligned}
+\]
+
+and thus L can be simplified as;
+\begin{equation}
+\boxed{L(a,b,c,d)=(b\oplus c,\;b,\;a,\;a\oplus d).}
+\qquad\square
+\label{eq:linear}
+\end{equation}
+
+The second output is simply $b$, and input $d$ affects only the fourth
+output. We will follow these limited dependencies through the complete
+rotor.\\
+
+Finally, Vahi and Jassbi assemble the components into the keyed rotor permutation,
+hereafter written $\mathtt{Enc}_i$.\\
+
+Starting with \(x\), perform
+\[
+ x\leftarrow L\Sigma(x\xor\kappa_j)\quad\text{for }j=0,1,2,3,
+ \qquad
+ x\leftarrow\Sigma(x\xor\kappa_0\xor\kappa_1)\xor\kappa_2\xor\kappa_3.
+\]
+
+$\mathtt{Enc}_i$ has an inverse $\mathtt{Dec}_i$, defined in the cipher's
+proposal paper~\cite{separ}. It reverses the order of operations and inverts
+each one, so $\mathtt{Dec}_i(\mathtt{Enc}_i(x))=x$.\\
+
+\subsection{Initialisation \& State}
+
+The \emph{state} consists of eight 16-bit words. There is also
+a \textit{Linear Feedback Shift Register} (LFSR), a state register
+updated by shifting bits and XORing selected feedback bits from the ciphertext. The state is initialised through rotor operations on the IV for the first block of encryption, and the LFSR is only used after this first encryption.\\
+
+For an initialised state \(s=(s_1,\ldots,s_8)\), the map is
+\begin{equation}
+ R_0(p)=p,\qquad R_i(p)=\mathtt{Enc}_i(R_{i-1}(p)+s_i),\qquad C(p)=R_8(p).
+ \label{eq:cascade}
+\end{equation}
+Here \(R_i(p)\) is the intermediate word after rotor \(i\), and
+\(C(p)\) is the ciphertext word returned to the attacker. Each
+stage first adds its state word and then applies its keyed rotor.
+The first rotor is nearest the plaintext; the eighth is nearest
+the ciphertext. We call the latter the \emph{outer rotor}.\\
+
+The cascade can be read from left to right below. Each labelled arrow
+adds a state word before the next rotor.
+\[
+p\xrightarrow{+\,s_1}\boxed{\mathtt{Enc}_1}
+ \xrightarrow{+\,s_2}\boxed{\mathtt{Enc}_2}
+ \longrightarrow\cdots
+ \xrightarrow{+\,s_8}\boxed{\mathtt{Enc}_8}
+ \longrightarrow C(p).
+\]
+
+For a fixed IV, all state words in \eqref{eq:cascade} are constants.
+The observed map is therefore a composition of fixed additions
+and fixed permutations when using the same chosen IV.\\
+
+Initialisation consists of four rounds of the map given later in
+Section~\ref{sec:state}.
+
+
+\setlength{\parskip}{5pt plus 1pt minus 1pt}
+\section{Preserved classes and useful states}\label{sec:state}
+\subsection{Weak rotor diffusion due to the Linear Layer}
+Diffusion spreads input information across the output, as described by
+Shannon in his seminal work \emph{Communication Theory of Secrecy Systems}~\cite{shannon1949}.
+Equation~\eqref{eq:linear} shows
+that one SEPAR layer mixes the nibbles poorly. We now follow those
+dependencies through the complete rotor to see whether its repeated
+substitutions and linear layer applications overcome this limitation.\\
+
+Consider the \(65536\) possible input words. We can define a \emph{partition} that divides
+them into disjoint groups, called \emph{classes}. We say a prefix is a specified number of leading bits.
+For example, fixing a 12-bit prefix leaves only the low nibble free, so each prefix
+class contains \(2^{16-12}=16\) words. There are 4096 such classes.
+We use this partition and two others:
+\[
+\begin{array}{ll}
+B_u=\{16u+d:0\le d<16\}, &0\le u<4096,\\
+H_v=\{256v+r:0\le r<256\}, &0\le v<256,\\
+M_w=\{4096a+16w+d:0\le a,d<16\}, &0\le w<256.
+\end{array}
+\]
+
+Their indices are the 12-bit prefix \(u=x\gg4\), the high
+byte \(v=x\gg8\), and the middle byte
+\(w=(x\gg4)\mathbin{\&}255\), respectively. Each index is a
+specified part of the word \(x\). The letters \(B,H,M\) will denote
+three different ways of defining a partition.\\
+
+The 12-bit prefix fixes nibbles $a,b,c$ and lets $d$ vary. The high byte view fixes $a,b$, while the middle byte view fixes $b,c$.\\
+
+\begin{figure}[htbp]
+	\centering
+	\begin{tikzpicture}[
+		every node/.style={font=\small},
+		fixed/.style={draw,fill=blue!12,minimum width=.65cm,minimum height=.55cm},
+		free/.style={draw,dashed,minimum width=.65cm,minimum height=.55cm}]
+		\node[anchor=west,font=\small\bfseries] at (0,.65) {View};
+		\node[font=\small\bfseries] at (4.35,.65) {Word \( (a,b,c,d) \)};
+		\node[anchor=west,font=\small\bfseries] at (6.15,.65) {Class label and size};
+		\node[anchor=west,font=\small\bfseries] at (10.4,.65) {Use};
+		
+		\node[anchor=west] at (0,0) {12-bit prefix \(B_u\)};
+		\foreach \x/\lab in {3.3/a,4.0/b,4.7/c}
+		\node[fixed] at (\x,0) {$\lab$};
+		\node[free] at (5.4,0) {$*$};
+		\node[anchor=west,align=left] at (6.15,0)
+		{\(u=256a+16b+c\)\\\scriptsize 4096 classes, 16 words each};
+		\node[anchor=west,align=left] at (10.4,0)
+		{Build cycles; verify candidates\\\scriptsize Sections~\ref{sec:decoder}--\ref{sec:inward}};
+		
+		\node[anchor=west] at (0,-1) {Middle byte \(M_w\)};
+		\node[free] at (3.3,-1) {$*$};
+		\node[fixed] at (4.0,-1) {$b$};
+		\node[fixed] at (4.7,-1) {$c$};
+		\node[free] at (5.4,-1) {$*$};
+		\node[anchor=west,align=left] at (6.15,-1)
+		{\(w=16b+c\)\\\scriptsize 256 classes, 256 words each};
+		\node[anchor=west,align=left] at (10.4,-1)
+		{Search rotor keys\\\scriptsize Sections~\ref{sec:decoder}--\ref{sec:inward}};
+		
+		\node[anchor=west] at (0,-2) {High byte \(H_v\)};
+		\node[fixed] at (3.3,-2) {$a$};
+		\node[fixed] at (4.0,-2) {$b$};
+		\foreach \x in {4.7,5.4}
+		\node[free] at (\x,-2) {$*$};
+		\node[anchor=west,align=left] at (6.15,-2)
+		{\(v=16a+b\)\\\scriptsize 256 classes, 256 words each};
+		\node[anchor=west,align=left] at (10.4,-2)
+		{Recover rotor two\\\scriptsize Section~\ref{sec:tail}};
+	\end{tikzpicture}
+	\caption{The three views of a word. Shaded nibbles are fixed within a
+		class; each \(*\) can take all sixteen values. From a prefix label \(u\),
+		the middle byte is \(w=u\bmod256\) and the high byte is
+		\(v=\lfloor u/16\rfloor\).}
+	\label{fig:class-views}
+\end{figure}
+
+Astute readers may recognise our choice of nibbles here from the weakness in the Linear Layer. We now follow the input dependencies through the rotor to see that
+these three partitions are preserved.\\
+
+A prefix class is \emph{aligned}
+when its first value is a multiple of its size, as in \(B_u\) or \(H_v\).\\
+
+A class's \emph{image} is the set of outputs obtained by applying
+the rotor to all its members. A rotor \emph{preserves a partition} when it sends every whole
+input class to a whole output class. It can rearrange both the classes
+and the words inside them. The resulting rearrangement of class
+indices is the \emph{induced permutation}. This describes the grouping without referring to how the individual words are ordered inside it.
+The following lemma proves that all
+three partitions are preserved.\\
+
+Let \(P\), \(Q\), \(M\), and \(T\) denote the 4 nibble output maps induced by a keyed rotor;
+
+\begin{lemma}[Rotor dependencies]\label{lem:triangular}
+For every rotor key,
+\[
+ \mathtt{Enc}_i(a,b,c,d)
+ =\bigl(P_{i,b}(a),\,Q_i(b),\,M_{i,b}(c),\,
+         T_{i,a,b,c}(d)\bigr),
+\]
+where each coordinate map is a permutation.
+The subscripts identify the fixed input nibbles; the argument is the
+nibble being varied. For example, \(P_{i,b}\) permutes \(a\) for a fixed
+rotor \(i\) and second input nibble \(b\).
+Consequently, the twelve most significant output bits depend only on
+the twelve most significant input bits. The induced permutation on middle bytes
+\[
+ m_i(16b+c)=16Q_i(b)+M_{i,b}(c)
+\]
+is a permutation of 256 values.
+\end{lemma}
+\begin{proof}
+One keyed substitution and linear layer send
+\((a,b,c,d)\) to coordinates depending respectively on
+\((b,c),b,a,(a,d)\). Four layers (the amount of applications specified per rotor) give dependency sets
+\((a,b),b,(b,c),(a,b,c,d)\). The final substitution and XOR
+do not enlarge them. With the other coordinates fixed, each
+coordinate calculation is a composition of nibble permutations and XORs.
+\end{proof}
+
+Substitution and XOR with a fixed subkey act separately on each nibble.
+Only the linear layer changes which input coordinates can influence
+an output. Applying~\eqref{eq:linear} four times gives the dependencies
+in Table~\ref{tab:dependencies}.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ccccc}
+\toprule
+Layers completed & First output & Second output & Third output & Fourth output\\
+\midrule
+0 & \(a\) & \(b\) & \(c\) & \(d\)\\
+1 & \(b,c\) & \(b\) & \(a\) & \(a,d\)\\
+2 & \(a,b\) & \(b\) & \(b,c\) & \(a,b,c,d\)\\
+3 & \(b,c\) & \(b\) & \(a,b\) & \(a,b,c,d\)\\
+4 & \(a,b\) & \(b\) & \(b,c\) & \(a,b,c,d\)\\
+\bottomrule
+\end{tabular}
+\caption{\textit{Input nibbles that can influence each output after successive
+substitution and linear layers. The final substitution and key XORs
+do not introduce further dependencies.}}
+\label{tab:dependencies}
+\end{table}
+
+In particular, changing \(d\) cannot change the first three output
+nibbles, and changing \(c,d\) cannot change the first two.
+The middle output byte depends only on \(b,c\), so both \(a\) and \(d\)
+can be discarded when studying that byte. Figure~\ref{fig:dependencies}
+shows these restrictions for the complete rotor.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[>=Stealth,every node/.style={font=\small}]
+\foreach \x/\lab in {0/a,2.2/b,4.4/c,6.6/d}
+  \node[draw,minimum width=1.5cm,minimum height=.7cm]
+    (i\lab) at (\x,1.7) {$\lab$};
+\node[draw,minimum width=1.5cm,minimum height=.7cm] (oa) at (0,0) {$P_b(a)$};
+\node[draw,minimum width=1.5cm,minimum height=.7cm] (ob) at (2.2,0) {$Q(b)$};
+\node[draw,minimum width=1.5cm,minimum height=.7cm] (oc) at (4.4,0) {$M_b(c)$};
+\node[draw,minimum width=1.8cm,minimum height=.7cm] (od) at (6.6,0) {$T_{a,b,c}(d)$};
+\draw[->,gray] (ia.south)--(od.north);
+\draw[->,gray] (ib.south)--(od.north);
+\draw[->,gray] (ic.south)--(od.north);
+\draw[->] (ia)--(oa);
+\draw[->] (ib)--(oa);
+\draw[->] (ib)--(ob);
+\draw[->] (ib)--(oc);
+\draw[->] (ic)--(oc);
+\draw[->] (id)--(od);
+\node[anchor=west] at (8,1.7) {input nibbles};
+\node[anchor=west] at (8,0) {output nibbles};
+\end{tikzpicture}
+\caption{\textit{Dependencies in a complete rotor.
+The low input nibble \(d\) has no path to any of the first three outputs.}}
+\label{fig:dependencies}
+\end{figure}
+
+Unlike prefix classes, the middle byte classes are not consecutive
+intervals of word values: their top and bottom nibbles both vary.
+We use the three views as follows:
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+View & Retained nibbles & Indices & Main use\\
+\midrule
+12-bit prefix & \(a,b,c\) & 4096 & Cycles of class indices\\
+Middle byte & \(b,c\) & 256 & Recovering rotor keys\\
+High byte & \(a,b\) & 256 & Final two rotors\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The dependencies ensure that all words in one input class have the
+same output index. Since the rotor is invertible and the classes have
+equal size, different input classes must go to different output classes.
+We can therefore treat each class as one object in a smaller permutation.
+
+\subsection{Consequences for differential analysis}\label{sec:diffusioncheck}
+The rotor dependencies let us test the claims discussed in
+Section~\ref{sec:literature}. We first check the local S-box probability,
+then examine how differences pass through the complete rotor.
+
+Direct enumeration of the four S-boxes in Section~\ref{sec:model}
+gives
+\[
+\max_{\alpha\ne0,\,\beta}D_{S_j}(\alpha,\beta)=4,
+\qquad j=1,2,3,4.
+\]
+Their maximum transition probability is therefore \(4/16=2^{-2}\).
+
+The rotor defined in Section~\ref{sec:model} gives a direct way to test
+the active S-box claim. Take any pair of inputs whose XOR difference
+is confined to the low nibble:
+\[
+\Delta=(0,0,0,\delta),
+\qquad \delta\ne0.
+\]
+The first three S-box inputs agree. Only \(S_4\) is active, and its
+output difference \(\delta'\) is nonzero because \(S_4\) is a
+permutation. Equation~\eqref{eq:linear} then gives
+\[
+L(0,0,0,\delta')=(0,0,0,\delta').
+\]
+The same argument applies at every internal layer, regardless of the
+subkeys. The difference never leaves the low nibble. Its value can
+depend on the inputs and subkeys, but its position and the fact that
+it is nonzero do not. Figure~\ref{fig:active-trail} shows this.
+
+\begin{figure}[htbp]
+	\centering
+	\begin{tikzpicture}[x=2.9cm,>=Stealth,every node/.style={font=\small}]
+		\foreach \j in {0,1,2,3,4}
+		\node[draw,minimum height=.8cm,inner sep=4pt] (n\j) at (\j,0)
+		{$(0,0,0,\delta_{\j})$};
+		\foreach \j/\k in {0/1,1/2,2/3,3/4}
+		\draw[->] (n\j)--node[above] {$L\Sigma$} (n\k);
+		\node at (2,-.85) {Only \(S_4\) is active in each layer; every \(\delta_j\ne0\).};
+	\end{tikzpicture}
+	\caption{\textit{A difference confined to the low nibble through four internal
+		rotor layers. Subkey XORs are omitted because they cancel in the
+		difference. This gives four active S-boxes in total.}}
+	\label{fig:active-trail}
+\end{figure}
+
+Thus four consecutive substitution and linear layers have a valid
+trail with exactly four active S-boxes. The final substitution adds
+one more, giving five across the complete rotor. This contradicts a
+universal lower bound of ten for the four internal layers of the
+rotor analysed here.\\
+
+The preserved prefixes also allow us to verify the differential tables
+for the rotor. Fix a key and a nonzero difference
+\(\alpha\) confined to the low nibble. For every input \(x\),
+Lemma~\ref{lem:triangular} ensures that the outputs for \(x\) and
+\(x\xor\alpha\) have the same first twelve bits. Since the rotor is
+bijective, their output difference is nonzero. There are therefore
+only fifteen possible output differences, all in the low nibble.
+
+The \(65536\) ordered inputs must be distributed among those fifteen
+possibilities, so at least one output difference satisfies by pidgeonhole;
+\[
+\max_{\beta\ne0}D_{\mathtt{Enc}_i}(\alpha,\beta)
+\ge \left\lceil\frac{65536}{15}\right\rceil=4370.
+\]
+If the reported value 22 is intended as the maximum unnormalised
+difference count for this same rotor, it is incompatible with that
+lower bound.
+
+This counterexample concerns one rotor. It remains to be shown whether these findings permit a practical differential attack on the cipher.
+
+
+\subsection{How IVs determine state}
+The preserved classes encode information about the rotors' keying (since it is the subkey that determines their relations), but the rotors are not the only component of the cipher. Whether
+the classes are easy to observe through the whole cascade depends on
+the state additions as well.
+
+Initialisation starts with the eight words of the IV and applies
+four rounds using the same keyed rotors as the encryption cascade.
+One initialisation round first computes
+\[
+v_1=\mathtt{Enc}_1(s_1+s_3+s_5+s_7),\qquad
+v_i=\mathtt{Enc}_i(v_{i-1}+s_i)\quad(2\le i\le8),
+\]
+then replaces \(s_1\) by \(s_1+v_8\) and \(s_i\) by
+\(s_i+v_{i-1}\) for \(i\ge2\).
+
+\begin{lemma}[Uniform state]\label{lem:uniform}
+For every fixed key, four initialisation rounds permute the
+128-bit IV space. Independent uniform IVs therefore give
+independent uniform initialised state words.
+\end{lemma}
+\begin{proof}
+For \(i\ge2\), the new state is \(t_i=s_i+v_{i-1}\), which is
+also the input used to compute \(v_i\). Hence \(v_i=\mathtt{Enc}_i(t_i)\).
+Given the output \(t\) of one round, invert in the order
+\[
+ s_1=t_1-\mathtt{Enc}_8(t_8),\quad
+ s_i=t_i-\mathtt{Enc}_{i-1}(t_{i-1})\ (i=8,\ldots,3),\quad
+ s_2=t_2-\mathtt{Enc}_1(s_1+s_3+s_5+s_7).
+\]
+Four bijections compose to a bijection.
+\end{proof}
+
+Thus, for a fixed key, every possible state comes from exactly one IV.
+Uniform IV sampling therefore lets us count the probability of the
+state patterns used in the attack.
+
+\subsection{Carries reveal adjacent classes}
+The state addition before a rotor can move word values across class
+boundaries. For example, adding six to \(B_2=\{32,\ldots,47\}\)
+produces the integers 38 through 53: ten belong to \(B_2\) and six
+to \(B_3\). We call these classes \emph{adjacent} because their
+indices are consecutive. At the end of the 16-bit range,
+addition wraps to zero, so the last class and class zero are adjacent
+too. Figure~\ref{fig:carry} shows the split that occurs when an offset is added to a class.
+
+Suppose the next rotor sends \(B_2\) to \(B_{41}\) and \(B_3\)
+to \(B_{46}\). The split then appears as ten output values in
+class 41 and six in class 46. These labels depend on the rotor key.
+The difficulty is recognising the pair after earlier rotors and additions
+have disturbed some of the words. We address this by counting how many
+words can leave their class.
+
+An input \emph{row} is a set of consecutive plaintexts that we examine
+together. For rows of length \(B\), its correct alignment makes the
+first addition land on a whole class of \(B\) words. A
+\emph{translation} means adding the same value to every input (with wrap around). A translation by
+a multiple of \(B\) then moves a class without splitting it. Any
+remaining part can move some word values into an adjacent class.
+We also call word values \emph{points} when discussing sets.
+The rotor that follows only renames the classes and rearranges their
+contents.
+
+We can then measure a small remainder in either direction.
+For instance, \(159=16\cdot10-1\): it is ten whole classes followed
+by a displacement of minus one. Write an intermediate state word
+as \(Bh_i+e_i\), where \(e_i\) is such a remainder.
+The number \(S=\sum_i|e_i|\) bounds how many row points can have
+left their intended class before the final addition.
+
+We call a point \emph{disturbed} when an intermediate addition's
+remainder moves it outside the intended class.
+
+For a row, count how many of its outputs fall in each class. We rank
+classes by these counts.
+
+\begin{lemma}[Two largest counts]\label{lem:block}
+Let \(B\) be 16 or 256, so every rotor preserves aligned classes of
+\(B\) words. Align a row of \(B\) plaintexts with the first addition. Before the
+last rotor, suppose the intermediate additions have remainders
+whose absolute values sum to \(S\). Let \(b\), with \(0<b<B\), be
+the remainder of the last addition. If
+\begin{equation}
+                      2S<\min(b,B-b),\label{eq:support} 
+\end{equation}
+
+the two output classes with largest row counts are exactly the images of two adjacent
+input classes of the last rotor. Together they contain at least
+\(B-S\) row points. After inverting that rotor, at least \(B-S\)
+points lie in one interval \([Bv+b,Bv+b+B-1]\), modulo
+the word size.
+\end{lemma}
+\begin{proof}
+After the first rotor, the aligned row fills one class. Adding
+\(Bh_i+e_i\) can move at most \(|e_i|\) of that class's points out
+of its intended translated class. Discard those points. The next
+rotor preserves the intended class, and cannot increase the number
+discarded. Repeating the argument leaves at least \(B-S\) points in the intended
+class before the last addition.
+
+A complete class would be split by the final addition into parts
+of sizes \(B-b\) and \(b\). Each intended output class therefore
+contains at least its complete class size minus \(S\). All other
+classes together contain at most \(S\) points. The strict inequality
+\eqref{eq:support} makes both intended counts greater than \(S\),
+so these are precisely the two largest classes. The retained points
+are also in the translated interval before the final rotor.
+\end{proof}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=.36cm,y=.65cm,>=Stealth,every node/.style={font=\small}]
+\fill[blue!12] (0,1) rectangle (16,2);
+\draw (0,1) rectangle (16,2);
+\node at (8,1.5) {one class: 32 through 47};
+\draw[->,thick] (17,1.5)--node[right] {$+6$} (17,.3);
+\fill[blue!12] (6,-1) rectangle (16,0);
+\fill[orange!25] (16,-1) rectangle (22,0);
+\draw (0,-1) rectangle (16,0);
+\draw (16,-1) rectangle (32,0);
+\draw[dashed] (16,-1.4)--(16,.4);
+\node at (11,-.5) {10 words};
+\node at (19,-.5) {6 words};
+\node at (0,-1.5) {32};
+\node at (16,-1.5) {48};
+\node at (32,-1.5) {64};
+\node at (8,-2.2) {class \(B_2\)};
+\node at (24,-2.2) {class \(B_3\)};
+\end{tikzpicture}
+\caption{Adding six splits a class of sixteen words between two adjacent
+classes. If earlier additions have disturbed at most two words, the
+intended counts remain at least eight and four, while all other classes
+together contain at most two. The two largest counts still identify
+the adjacent pair.}
+\label{fig:carry}
+\end{figure}
+
+For \(B=16\), condition~\eqref{eq:support} implies \(S\le3\) as the maximum value of $\min({b, 16 - b}) = 8$.
+The count is recorded in an undirected graph where each vertex is an observed
+output class index, and an edge joins the two indices occurring
+most often in one row.
+
+When every adjacent input pair has been observed, a hidden induced
+permutation \(q\) on \(n\) class indices gives the cycle;
+\[
+                 q(0),q(1),\ldots,q(n-1),q(0).
+\]
+
+For example, the order \(2,0,3,1,2\) gives edges
+\(\{2,0\},\{0,3\},\{3,1\},\{1,2\}\). Following the edges
+recovers the order, but leaves an unknown \emph{origin}, the vertex
+corresponding to input zero, and an unknown \emph{orientation}, which
+direction corresponds to increasing input values. The attack tries
+both directions and all compatible origins. 
+
+\section{Generating rotor key candidates}\label{sec:decoder}
+Section~\ref{sec:state} shows how adjacent classes reveal a rotor's cyclic
+order. We now turn that order into key candidates. The starting input and
+direction are unknown, and an inner rotor may also be followed by an
+unknown addition. The second nibble gives us a way into the problem:
+its sixteen outputs depend on just four key nibbles. We search these
+first, use the key schedule to extend them to complete rotor keys, and
+compare the resulting permutations with the observed cycle.
+\textit{
+Throughout this section, byte values and positions are reduced modulo
+256, and prefix values and positions modulo 4096.}
+
+\subsection{The second nibble}
+Write the four round subkeys as
+\(\kappa_j=(\alpha_j,\beta_j,\gamma_j,\delta_j)\), for \(j=0,1,2,3\).
+Only the four \(\beta_j\)'s affect the second output nibble. Each round
+XORs this nibble with \(\beta_j\), applies \(S_2\), and leaves the result
+unchanged in the linear layer. For input \(b\), its path is
+\begin{align*}
+ b_0&=S_2(b\xor\beta_0),\\
+ b_1&=S_2(b_0\xor\beta_1),\\
+ b_2&=S_2(b_1\xor\beta_2),\\
+ b_3&=S_2(b_2\xor\beta_3),\\
+ Q(b)&=S_2(b_3\xor\beta_0\xor\beta_1)\xor\beta_2\xor\beta_3.
+\end{align*}
+There are \(16^4=65536\) choices of these four nibbles. For each choice,
+we calculate the sixteen values of \(Q\).
+
+\subsection{Reading the middle byte cycle}\label{sec:middlecycle}
+An input middle byte is \(16b+c\). Fixing \(b\) and letting \(c\)
+run from zero to fifteen gives a \emph{block} of sixteen consecutive
+input bytes. Its outputs all have the same second nibble, \(Q(b)\),
+while the third output nibble takes every value. The cycle therefore
+consists of sixteen blocks of length 16, each with a different constant
+second output nibble. Adding a multiple of sixteen to the output byte
+changes those labels but preserves the blocks.
+
+We can locate a block boundary by finding where the second output
+nibble changes. Start the observed list immediately after such a
+change, and check that it has sixteen blocks of length 16 with distinct
+labels. Call these labels \(O(0),\ldots,O(15)\).
+
+We still need to find the starting input block \(j\), the direction
+\(\varepsilon\), and the addition \(\lambda\) to the second output
+nibble. Try each \(j\in\{0,\ldots,15\}\) and
+\(\varepsilon\in\{1,-1\}\). For a proposed \(Q\), the first label fixes
+\[
+ \lambda=O(0)-Q(j)\pmod {16}.
+\]
+Check the other labels using
+\begin{equation}
+ O(k)=Q(j+\varepsilon k)+\lambda\pmod {16},
+ \qquad 0\le k<16.
+ \label{eq:smallguess}
+\end{equation}
+The input to \(Q\) is also reduced modulo 16. At the outer rotor there
+is no following addition, so we require \(\lambda=0\).
+
+For example, a forward cycle starting at input block nine, with an
+output addition of three, has labels
+\(Q(9)+3,Q(10)+3,\ldots,Q(8)+3\), reduced modulo sixteen.
+The guess \(j=9,\varepsilon=1\) determines the addition from the first
+label, and the remaining labels test that guess.
+
+\subsection{Extending guesses to rotor keys}
+The four guessed \(\beta\) nibbles restrict the original key words
+\((k_0,k_1)\). The schedule derives \(\kappa_2\) from \(k_0\) and
+\(\kappa_3\) from \(k_1\), so we can search the words separately:
+\begin{enumerate}
+\item Try all 65536 values of \(k_0\). Keep those whose second nibble
+is \(\beta_0\) and whose scheduled \(\kappa_2\) has second nibble \(\beta_2\).
+\item Do the same for \(k_1\), using \(\beta_1\) and \(\beta_3\).
+\item Pair the surviving words and compare each resulting rotor with
+the observed middle byte cycle.
+\end{enumerate}
+Enumerating the possible words gives at most 576 entries in each list
+for this schedule. Each surviving nibble guess therefore leaves at most
+\(576^2=331776\) key pairs to test.
+
+Write \(Y_0,\ldots,Y_{255}\) for the observed middle bytes, starting at
+the block boundary chosen above. The first input byte is
+\[
+ v=\begin{cases}
+ 16j,&\varepsilon=1,\\
+ 16j+15,&\varepsilon=-1.
+ \end{cases}
+\]
+In the forward direction we enter a block at \(c=0\); in reverse we
+enter at \(c=15\). Position \(x\) then corresponds to input
+\(v+\varepsilon x\), modulo 256.
+
+For a candidate key \(K=(k_0,k_1)\), calculate
+\[
+ m_K(z)=(\mathtt{Enc}_K(16z)\gg4)\mathbin{\&}255.
+\]
+When \(z=16b+c\), the word \(16z\) has nibbles \((0,b,c,0)\).
+By Lemma~\ref{lem:triangular}, the top and bottom input nibbles do not
+affect this middle output byte. The complete comparison is
+\begin{equation}
+ m_K(v+\varepsilon x)+16\lambda
+ \equiv Y_x\pmod {256},
+ \qquad 0\le x<256.
+ \label{eq:guesscheck}
+\end{equation}
+Keep every key pair that agrees at all 256 positions.
+
+\begin{theorem}[Completeness of the key search]\label{thm:middlecomplete}
+Given a middle byte rotor cycle up to an input origin, direction, and
+an output multiple of 16, the procedure above returns every
+compatible rotor key and that output shift.
+\end{theorem}
+\begin{proof}
+Take any compatible key. The search tries its four second subkey nibbles,
+its starting block, and its direction. Equation~\eqref{eq:smallguess}
+then gives its output addition. Both original key words pass the
+schedule checks, so their pair reaches~\eqref{eq:guesscheck}.
+It agrees with the full cycle and is retained.
+\end{proof}
+
+The lists of key words can be prepared once and reused. We also group
+the nibble guesses by their first three output differences,
+\[
+ \bigl(Q(j+\varepsilon)-Q(j),\;
+ Q(j+2\varepsilon)-Q(j),\;
+ Q(j+3\varepsilon)-Q(j)\bigr)\pmod {16}.
+\]
+Subtracting the first output removes \(\lambda\), so the observed
+differences select the guesses to compare against all sixteen labels.
+
+\subsection{Checking the full prefix cycle}\label{sec:prefixcheck}
+When all 4096 prefix labels are available, the top nibble gives a further
+check on the candidates. Write
+\(q_K(x)=\mathtt{Enc}_K(16x)\gg4\).
+With starting input \(a\), direction \(\varepsilon\), and a following
+addition \(h\), the observed prefix cycle has the form
+\begin{equation}
+ q_K(a+\varepsilon x)+h\pmod {4096},
+ \qquad h=\ell+16\lambda+256H.
+ \label{eq:cycle}
+\end{equation}
+Each of \(\ell,\lambda,H\) is a nibble. We recover them in three steps:
+\begin{enumerate}
+\item Try each \(\ell\), subtract it from the observed cycle, and keep
+the low byte. This must give sixteen copies of one 256-entry cycle,
+since the middle byte does not depend on the top input nibble.
+\item Apply the middle byte search to one copy. It returns candidate
+keys and the middle nibble \(\lambda\) of the addition.
+\item For each result, try all sixteen \(H\)'s. Locate \(q_K(0)+h\)
+in the full cycle and compare all 4096 entries in both directions.
+\end{enumerate}
+The value at input zero fixes the origin for the last comparison.
+Thus the same search recovers candidates for a rotor alone or for a
+rotor followed by an addition. 
+
+We will now show how we can use these lemmas and algorithms to obtain a cycle, apply the keysearch, and then undo the outermost rotor to work our way through the cipher.
+
+
+\section{Recovering the outer rotor}\label{sec:outer}
+We must treat rotor 8 (the outermost rotor) as a special case since there is no preceding state addition. We can apply the key search directly to a cycle built
+from ciphertext, and sample IVs until the state additions leave enough
+of each plaintext class together for Lemma~\ref{lem:block} to apply.
+
+\subsection{When the cycle is visible}
+Group plaintexts into rows of sixteen. The correct alignment is
+\(r=-s_1\bmod16\), so we try all sixteen values of \(r\).
+For the six intermediate additions, write \(s_i=16h_i+e_i\),
+choosing the remainder nearest zero, and set
+\[
+ S=\sum_{i=2}^7|e_i|,\qquad b=s_8\bmod16.
+\]
+Lemma~\ref{lem:block} identifies the images of adjacent classes whenever
+\begin{equation}
+ 2S<\min(b,16-b).
+ \label{eq:outerevent}
+\end{equation}
+Call this the \emph{outer event}. If \(S=0\), the intermediate additions
+preserve whole classes and the last addition splits them. The lemma
+also allows up to three disturbed words, giving us more useful IVs.
+
+For each of 256 aligned rows, select the two most frequent ciphertext
+prefixes and reduce their labels modulo 256 to obtain middle bytes.
+Join each pair by an edge. On the outer event, the rows cover all
+adjacent pairs of middle byte classes, giving the cycle needed by
+Section~\ref{sec:decoder}. We check that every vertex has two neighbours
+and that following the edges visits all 256 vertices before returning
+to the start.
+
+\subsection{Applying the key search}
+Apply Theorem~\ref{thm:middlecomplete} with no output addition. For each
+candidate, invert the rotor on the complete words in the rows.
+The two dominant prefix classes must become adjacent. The words must
+also fit the split caused by the last state addition.
+
+To test this, try \(b=1,\ldots,15\) and let
+\begin{equation}
+ L(b)=\min\left(3,\left\lfloor
+       \frac{\min(b,16-b)-1}{2}\right\rfloor\right).
+ \label{eq:carrytest}
+\end{equation}
+This is the largest number of disturbed words allowed by
+\eqref{eq:outerevent}. Require at least \(16-L(b)\) words in an interval
+\([16v+b,16v+b+15]\), modulo 65536, in every row. The class index \(v\)
+may vary between rows but the same \(b\) must work throughout. Retain every
+key and \(b\) that pass.
+
+\begin{theorem}[Outer rotor recovery]\label{thm:outer}
+On event~\eqref{eq:outerevent}, the cycle search and row test retain the
+true \(K_8\). For every fixed master key, a uniform IV satisfies this
+event with probability
+\begin{equation}
+ p_{\rm out}=\frac{1527}{16^7}\approx5.68852\times10^{-6}.
+ \label{eq:pout}
+\end{equation}
+\end{theorem}
+\begin{proof}
+The graph gives the true middle byte cycle, so
+Theorem~\ref{thm:middlecomplete} retains the true key.
+After its inverse, Lemma~\ref{lem:block} gives adjacent classes and
+at least \(16-S\) words in the required interval. Since \(S\le L(b)\),
+the row test passes.
+
+To count the states, group the six remainders by their total
+absolute value \(S\):
+\[
+\begin{array}{c|l|r|r}
+S&\text{nonzero magnitudes}&\text{choices}&\text{allowed }b\\\hline
+0&\text{none}&1&15\\
+1&1&6\cdot2=12&11\\
+2&2\text{ or }1+1&6\cdot2+15\cdot4=72&7\\
+3&3,\ 2+1,\text{ or }1+1+1&6\cdot2+30\cdot4+20\cdot8=292&3
+\end{array}
+\]
+For example, \(2+1\) has six choices for the position of the two,
+five for the one, and four choices of signs. For each \(S\),
+the condition \(2S<b<16-2S\) allows \(15-4S\) values of \(b\).
+By Lemma~\ref{lem:uniform}, the seven low nibbles are uniform, giving
+\[
+ p_{\rm out}
+ =\frac{1\cdot15+12\cdot11+72\cdot7+292\cdot3}{16^7}
+ =\frac{1527}{16^7}.
+\]
+\end{proof}
+
+\subsection{Screening IVs}
+Most IVs can be rejected after a few queries. Before collecting the
+cycle, query strips of 31 consecutive plaintexts at twelve fixed
+positions. Each strip contains a complete row at every possible
+alignment. If \(A\ge B\) are the two largest prefix counts, require
+\[
+ A+B\ge13,\qquad B>16-A-B.
+\]
+These tests allow at most three words outside the dominant pair and
+require the smaller count to exceed the total outside it. We first
+check subsets of six and nine words, requiring the two largest counts
+to sum to at least the subset size minus three.
+
+For an alignment that survives all twelve strips, query
+\(p=0,\ldots,4110\). These \(4111=256\cdot16+15\) words supply the
+256 rows at every alignment. Run the cycle search and row test on each
+surviving alignment.
+
+\section{Recovering the remaining rotors}\label{sec:inward}
+Once we have a candidate for \(K_8\), we can invert the outer rotor:
+\[
+ \mathtt{Dec}_8(C(p))=R_7(p)+s_8.
+\]
+The next rotor is now visible through an unknown addition. Section~\ref{sec:decoder}
+already handles this situation. We recover candidates for \(K_7\) and
+\(s_8\), subtract the addition, and invert rotor seven. Repeating this
+idea takes us inward to \(K_3\). The first two rotors need a change of
+class size, described in Section~\ref{sec:tail}.
+
+\subsection{Keeping track of the state}
+If the current table is \(Y_t(p)=R_t(p)+s_{t+1}\), one step gives
+\begin{equation}
+ \mathtt{Dec}_t(Y_t(p)-s_{t+1})=R_{t-1}(p)+s_t.
+ \label{eq:pivot}
+\end{equation}
+The rotor keys are shared by all IVs, while the state additions belong
+to one IV. We therefore save each useful IV and its codebook together
+with the keys and additions used to transform it. We call this a
+\emph{record}, and retain every surviving one to ensure the true branch (if it is included) is not dropped.
+
+Write a state word as \(s_i=16h_i+\ell_i\), with \(0\le\ell_i<16\).
+After trying and subtracting the bottom nibble \(\ell_i\), the remaining
+addition shifts each prefix label by \(h_i\). This is the output shift
+in Section~\ref{sec:prefixcheck}.
+
+\subsection{States that expose an inner rotor}
+To reach an inner rotor, look for a state in which one addition makes
+a small split and the surrounding additions preserve classes.
+For a target \(t\in\{6,5,4,3\}\), define the event \(E_t\) by
+\begin{equation}
+ \begin{gathered}
+ s_i\bmod16=0\quad(2\le i\le6,\ i\ne t),\qquad
+ e_t\in\{-3,-2,-1,1,2,3\},\\
+ 2|e_t|<\min(b_7,16-b_7),
+ \end{gathered}
+ \label{eq:inner}
+\end{equation}
+where \(e_t\) is the remainder of \(s_t\), and
+\(b_7=s_7\bmod16\). For example, remainders
+\((s_2,s_3,s_4,s_5,s_6,s_7)=(0,0,0,2,0,6)\) satisfy \(E_5\).
+
+This state serves two purposes. First, at most \(|e_t|\) words leave
+their intended class before rotor seven. The inequality lets us apply
+Lemma~\ref{lem:block} there, just as at the outer rotor. After inverting
+rotor eight, try the bottom nibble of \(s_8\), build the cycle, and use
+Section~\ref{sec:prefixcheck} to find \(K_7\) and the rest of \(s_8\).
+Subtracting \(s_8\) and inverting rotor seven leaves a record of
+\(R_6(p)+s_7\).
+
+Second, the addition before rotor \(t\) splits a whole class into exactly
+\(16-|e_t|\) words and \(|e_t|\) words. The later additions through
+\(s_6\) are multiples of sixteen, so they and the intervening rotors
+only permute the two classes. Removing those later operations reveals
+rotor \(t\)'s cycle, ready for the same key search.
+
+For \(|e_t|=1,2,3\), there are eleven, seven, and three choices of
+\(b_7\), respectively, and two signs for \(e_t\). Six low nibbles are
+constrained, so Lemma~\ref{lem:uniform} gives
+\begin{equation}
+ q=\Pr(E_t)=\frac{2(11+7+3)}{16^6}=\frac{42}{16^6}.
+ \label{eq:q}
+\end{equation}
+This is about one useful IV in 399458 for each target rotor.
+
+We sample uniform IVs and screen them as in Section~\ref{sec:outer}, trying each bottom nibble of \(s_8\).
+A surviving IV is tested on the 4111-word partial codebook. After a
+candidate \(K_7,s_8\) is removed, try the bottom nibble of \(s_7\).
+Every row must then contain exactly two prefix classes, with one
+consistent split: 15 and 1, 14 and 2, or 13 and 3. Complete the codebook
+for records that pass, and check the same split on every row.
+
+\subsection{Finding the state additions}\label{sec:offsets}
+An \(E_6\) record now gives \(K_6\) directly by
+Section~\ref{sec:prefixcheck}. For \(E_5,E_4,E_3\), we also need to undo
+the already recovered rotors between the target and rotor six.
+Their state additions are unknown for the new IV.
+
+Subtract a retained bottom nibble of \(s_7\) and build the prefix cycle.
+All remaining additions after the target rotor are now multiples of
+sixteen. Write each as \(16h\). Only \(h\bmod256\) affects the middle
+byte, so we can find this part first and leave the top nibble for later.
+
+For example, with one known rotor outside the target, the middle byte
+cycle has the form
+\[
+ W(x)=m_1(m_0(x)+h_0)+h_1\pmod {256},
+\]
+where \(m_0\) is the unknown rotor's middle byte map and \(m_1\) is
+known.
+
+Try each byte value of \(h_1\) and calculate
+\[
+ V(x)=m_1^{-1}(W(x)-h_1).
+\]
+The correct guess leaves \(m_0(x)+h_0\), which is the single rotor
+problem from Section~\ref{sec:decoder}.
+
+With \(d\) known rotors, repeat this subtraction and inversion from
+outside inward, trying all \(256^d\) combinations of byte additions.
+Here \(d\le3\): the largest search is for \(K_3\) through
+\(K_4,K_5,K_6\), giving \(256^3=2^{24}\) combinations.
+The middle byte repeats every 256 positions of the prefix cycle, so
+one repetition is enough for this search.
+
+A short check rejects most guesses before the key search. Within an
+input block, the sixteen outputs of \(m_0+h_0\) occupy sixteen consecutive
+byte values, possibly wrapping through zero. Define circular distance by
+\[
+ D(a,b)=\min\bigl((a-b)\bmod256,\ (b-a)\bmod256\bigr).
+\]
+Of any sixteen consecutive steps in the cycle, only one crosses an
+input block boundary. At most one step can therefore have distance
+greater than fifteen. Reject guesses with two such steps in a group.
+
+For each surviving list \(V\), write \(h_0=f+16\lambda\) modulo 256.
+Try the sixteen values of \(f\), subtract each from \(V\), and apply
+Theorem~\ref{thm:middlecomplete}. This gives the target rotor key and
+\(\lambda\), completing the byte parts of the additions.
+
+It remains to recover their top nibbles. The middle byte comparison
+fixes a cycle position \(a\) whose input middle byte is zero, and a
+direction \(\varepsilon\). Try the sixteen possible top input nibbles
+\(u\) and the top nibbles of the first \(d\) additions. The last addition
+is determined by one observed output. There are at most
+\(16^{d+1}\le65536\) combinations.
+
+More precisely, let \(F\) be the proposed chain of prefix permutations
+with the last addition set to zero, and now let \(W\) denote the full
+prefix cycle. Set
+\[
+ h_d=W(a)-F(256u)\pmod {4096},
+\]
+check that its low byte agrees with the earlier result, and require
+\[
+ F(x+256u)+h_d=W(a+\varepsilon x)\pmod {4096}
+ \qquad(0\le x<4096).
+\]
+Finally, apply the proposed inverses and additions to the complete
+words and repeat the row test from Section~\ref{sec:outer}. Save every
+key and set of additions that pass.
+
+\begin{lemma}[Correct additions survive the search]\label{lem:join}
+When \(E_t\) holds and the previously recovered keys and additions
+are correct, the search retains the true \(K_t\) and the intervening
+state additions.
+\end{lemma}
+\begin{proof}
+The byte search includes the actual additions. Undoing them leaves the
+target rotor followed by \(h_0\). Its outputs within each input block
+lie in an interval of sixteen values, so it passes the distance check.
+Trying the actual \(f\) lets Theorem~\ref{thm:middlecomplete} recover
+the true key and \(\lambda\).
+
+The remaining guesses include the actual top nibbles. These determine
+the last addition and reproduce every prefix entry. After the correct
+operations are undone on complete words, each row is the translated
+interval produced by the single split at rotor \(t\), so it passes the
+row test.
+\end{proof}
+
+We can now use an \(E_6\) record to recover \(K_6\), then records for
+\(E_5,E_4,E_3\) to recover \(K_5,K_4,K_3\) in order. Each step supplies
+the known rotor needed by the next.
+
+\section{Recovering the first two rotors}\label{sec:tail}
+After finding \(K_3\) on an \(E_3\) record and undoing the later
+operations, we have
+\[
+ Z(p)=\mathtt{Enc}_2\bigl(\mathtt{Enc}_1(p+s_1)+s_2\bigr)+s_3.
+\]
+
+We also know the input alignment \(r=-s_1\bmod16\) and have candidates
+\(\ell\) for the bottom nibble of \(s_3\).
+
+\paragraph{Rotor two.}
+Here \(s_2\) is a multiple of sixteen, so it preserves classes of
+sixteen words. To obtain a split, use rows of 256 words and require
+\(s_2\bmod256\ne0\). A multiple of sixteen can still split one of
+these larger classes: adding sixteen, for example, gives 240 words
+in one high byte class and sixteen in the next.
+
+Try each extension \(r_{256}=r+16j\) of the input alignment and
+\(c=\ell+16v\) of the output residue, with \(0\le j,v<16\).
+For each row starting at \(r_{256}+256u\), count the labels
+\[
+ ((Z(p)-c)\bmod65536)\gg8.
+\]
+With the correct guesses, rotor one gives a complete high byte
+class, and adding \(s_2\) splits it between two neighbours.
+Their images under rotor two give the edges of a 256-entry cycle.
+The remaining output addition is \(D=(s_3-c)/256\).
+
+We can use the same key guesses based on the second nibble as before.
+In the high byte view, the second nibble is the low nibble of each
+label. Its sequence repeats every sixteen entries, so use one repeat
+to search for the four key nibbles, allowing an unknown starting
+point, direction, and output addition. Extend the guesses to full
+rotor keys as in Section~\ref{sec:decoder}. Try all sixteen values
+for the upper nibble of \(D\), and keep only matches on all 256 cycle
+entries. Each match gives \(K_2\) and \(s_3=c+256D\).
+
+\paragraph{Rotor one.}
+Undo each candidate to get
+\[
+ U(p)=\mathtt{Dec}_2(Z(p)-s_3)
+     =\mathtt{Enc}_1(p+s_1)+s_2
+\]
+for the correct guesses. Use sixteen word rows again, with starts
+\(16u\) and \(16u+1\). After adding \(s_1\), these alignments differ
+by one, so at least one splits each row between neighbouring classes.
+
+Since \(s_2\) is a multiple of sixteen, the prefix cycle search gives
+candidates for \(K_1\) and \(s_2\). The remaining addition follows from
+the entry at plaintext zero:
+\[
+ s_1=\mathtt{Dec}_1(U(0)-s_2).
+\]
+Check all 65536 entries of \(U\). Then verify each complete master key
+against the saved codebooks, recomputing initialisation from each IV.
+
+\begin{lemma}[Recovery of the first two rotors]\label{lem:tail}
+Given the correct keys and additions for the later rotors, \(E_3\)
+together with \(s_2\bmod256\ne0\) suffices to retain the true remaining
+keys and additions.
+\end{lemma}
+\begin{proof}
+The searches for rotor two include its true alignment, output
+addition, and key. They reproduce its cycle, so they are retained.
+After undoing them, at least one of the two row alignments reveals
+rotor one's cycle. Its true key and additions pass the key search
+and all checks on complete words.
+\end{proof}
+
+Under \(E_3\), the bottom nibble of \(s_2\) is zero, while the next
+nibble is still uniform. Fifteen of its sixteen values make the
+low byte nonzero. The event needed for these final steps therefore has
+probability
+\[
+ \frac{42}{16^6}\cdot\frac{15}{16}=\frac{630}{16^7}.
+\]
+Rotor one requires no further state condition.
+
+\section{Recovery algorithm and success probability}\label{sec:bounds}
+The complete recovery has three stages:
+\begin{enumerate}
+\item Use the outer IV budget to collect candidates for \(K_8\).
+For each candidate, use a separate inward IV budget to find \(K_7\)
+and save the records from Section~\ref{sec:inward}.
+\item Extend each surviving pair one key at a time, finding
+\(K_6,K_5,K_4,K_3\). Keep every matching key and its state additions.
+\item Recover \(K_2,K_1\) using Section~\ref{sec:tail}.
+Check each complete key against every saved codebook,
+including initialisation from its IV.
+\end{enumerate}
+
+The true key survives whenever the samples contain each of these
+state patterns:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Event & Information supplied & Probability per IV\\
+\midrule
+Outer event & \(K_8\) candidate & \(1527/16^7\)\\
+\(E_6\) & \(K_7\), then \(K_6\) & \(42/16^6\)\\
+\(E_5\) & \(K_5\) & \(42/16^6\)\\
+\(E_4\) & \(K_4\) & \(42/16^6\)\\
+\(E_3\), with \(s_2\bmod256\ne0\)
+  & \(K_3\), then \(K_2,K_1\) & \(630/16^7\)\\
+\bottomrule
+\end{tabular}\\
+\end{center}
+
+\textbf{Probability of retaining the true key}
+
+For every 256-bit master key, use \(m\) independent
+uniform outer IVs and \(N\) independent uniform inward IVs
+for each outer candidate. The probability that the final
+list omits the true master key is at most
+\begin{equation}
+ \epsilon(m,N)
+=\left(1-\frac{1527}{16^7}\right)^m
+ +3\left(1-\frac{42}{16^6}\right)^N
+ +\left(1-\frac{630}{16^7}\right)^N .
+\label{eq:epsilon}
+\end{equation}
+At \(m=4205000\), \(N=7900000\), this is
+\begin{equation}
+             \epsilon(m,N)
+             \approx1.6638512940036\cdot10^{-8}
+             <1.663852\cdot10^{-8}.
+\label{eq:number}
+\end{equation}
+
+\[
+\boxed{\Pr\{\text{the algorithm returns the true key}\}
+       \ge 1-1.663852\cdot10^{-8}.}
+\]\\
+
+The output is a list of master keys that pass the checks and reproduce
+the saved codebooks from their IVs. All 500 measured runs returned a
+single key. A general bound on the number of surviving candidates
+remains open.
+
+
+\subsection{Query and computation costs}\label{sec:effort}
+The implementation uses 4205000$\approx (2^{22}$ outer IVs, and
+7900000$\approx (2^{23}$ inward IVs per each outer candidate (of which there has only been 1 observed per run).
+
+Figures~\ref{fig:2d} and~\ref{fig:3d} show how the success bound changes
+with the two budgets.
+
+\begin{figure}[htbp]
+	\centering
+	\includestandalone[width=0.7\textwidth]{data/budget_success_2d}
+	\caption{The lower bound on success probability as the IV budgets vary.}
+	\label{fig:2d}
+\end{figure}
+\begin{figure}[htbp]
+	\centering
+	\includestandalone[width=0.7\textwidth]{data/budget_success_3d}
+	\caption{The success bound as a function of both IV budgets.}
+	\label{fig:3d}
+\end{figure}
+
+For example, using one quarter of each budget gives a success lower
+bound of about 96.64\%. The larger budgets reduce the failure bound to
+the value in~\eqref{eq:number}.
+
+Let \(B_o\) and \(B_i\) be the outer and inward budgets, \(Q\) be the number of total oracle queries, and let \(C\)
+be the number of outer candidates. Assuming the absolutely worst case bound where screening and codebook collection use
+at most 4483 queries per outer IV and 66032 per inward IV, giving
+\[
+ Q\le4483B_o+66032B_iC.
+\]
+At the stated budgets, this is
+\[
+ Q\le18851015000+521652800000C
+   \approx2^{34.13}+2^{38.92}C.
+\]
+
+This does not represent a typical run however. In 500 runs on randomly generated keys, every run produced only a single outer
+candidate, and most IVs were rejected after a few queries by the smart filtering described above. 
+
+The average
+was \(2^{27.83}\) queries per run. The measured runtimes below use a single threaded of an AMD Ryzen 9 8945HS processor running
+at about 4\,GHz.\\
+
+\pgfplotsset{compat=1.18}
+\definecolor{datacolor}{RGB}{38,75,106}
+\definecolor{fitcolor}{RGB}{181,70,41}
+\begin{tikzpicture}
+	\begin{axis}[
+		name=histogram,
+		width=15.8cm,height=9.2cm,
+		title={Key recovery runtime},
+		xlabel={Recovery time (s)},ylabel={Number of trials},
+		xmin=45.00000,xmax=118.00000,ymin=0,ymax=25.96000,
+		ytick distance=2,xtick distance=10,
+		tick label style={font=\small},label style={font=\small},
+		title style={font=\small\bfseries},
+		axis line style={black!65},tick style={black!65},
+		ymajorgrids=true,grid style={black!10},
+		legend style={font=\small,draw=none,fill=white,cells={anchor=west},
+			at={(0.02,0.98)},anchor=north west},
+		scaled ticks=false,
+		]
+		\addplot[ybar interval,area legend,draw=datacolor!80,fill=datacolor!25,line width=0.5pt]
+		table[x=left_seconds,y=trials,col sep=comma]{data/histogram.csv};
+		\addlegendentry{Trials ($n=500$)}
+		\addplot[fitcolor,line width=1.3pt,no marks]
+		table[x=runtime_seconds,y=expected_trials,col sep=comma]{data/normal_curve.csv};
+		\addlegendentry{Fitted normal curve}
+	\end{axis}
+	\node[anchor=north,font=\small,align=center] at
+	([yshift=-1.2cm]histogram.south) {1-second buckets.\quad $\mu=81.481$ s, $\sigma=11.879$ s.};
+\end{tikzpicture}
+
+
+
+\newpage
+
+\section{Conclusion}
+
+In conclusion, this work demonstrates a key recovery attack 
+against SEPAR well below bruteforce given a chosen IV chosen
+plaintext oracle. We have demonstrated insufficient diffusion 
+in the Linear Layer derived from the ciphers own algebra, and shown 
+how that diffusion can be exploited at both the rotor level, and the 
+whole Encryption block level to recover the full key with negligible 
+chance of failure. 
+
+
+The resulting attack recovers candidates for the full master key under
+chosen IV and chosen Plaintext queries. With the stated budgets, the
+probability of omitting the true key is below \(1.663852\times10^{-8}\),
+and the algorithm runs at the second scale on consumer hardware.
+
+Work remains to be done to bound the number of surviving keys and establish the existence of a practical
+differential attack on the full cipher.
+
+\newpage
+
+\begin{thebibliography}{9}\small
+\bibitem{separ} A. Vahi and S. Jafarali Jassbi.
+SEPAR: A New Lightweight Hybrid Encryption Algorithm with a Novel
+Design Approach for IoT. \emph{Wireless Personal Communications}
+114, 2283--2314, 2020.
+\href{https://doi.org/10.1007/s11277-020-07476-y}
+{doi:10.1007/s11277-020-07476-y}.
+\bibitem{separ-differential} A. Vahi and M. Mirnia.
+On the Differential Cryptanalysis of SEPAR Cipher.
+\href{https://arxiv.org/abs/2106.12638}{arXiv:2106.12638}, 2021.
+\bibitem{heys-key-dependency} H. M. Heys.
+Key Dependency of Differentials: Experiments in the Differential
+Cryptanalysis of Block Ciphers Using Small S-boxes.
+\emph{Cryptology ePrint Archive}, Report 2020/1349, 2020.
+\href{https://eprint.iacr.org/2020/1349}{eprint.iacr.org/2020/1349}.
+\bibitem{hac} A. J. Menezes, P. C. van Oorschot, and S. A. Vanstone.
+\emph{Handbook of Applied Cryptography}. CRC Press, 1996.
+\href{https://cacr.uwaterloo.ca/hac/about/chap7.pdf}{Chapter 7}.
+\bibitem{shannon1949}
+C. E. Shannon.
+Communication Theory of Secrecy Systems.
+\emph{Bell System Technical Journal},
+28(4), 656--715, 1949.
+\url{https://doi.org/10.1002/j.1538-7305.1949.tb00928.x}.
+\end{thebibliography}
+\end{document}
+
